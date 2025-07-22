@@ -49,13 +49,13 @@ def on_connect(client, userdata, flags, reason_code, properties):
     # reconnect then subscriptions will be renewed.
     client.subscribe("$SYS/#")
 
-def serve(mesh_functions: Dict[str, Callable]=None):
+def serve(broker, port=1883, mesh_functions: Dict[str, Callable]=None):
     if mesh_functions:
         function_map.clear()
         function_map.update(mesh_functions)
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-    client.connect("mosquitto.doesliverpool.xyz", 1883)
+    client.connect(broker, port)
 
     # Subscribe to the processing requests topic
     client.subscribe("godot/processing_requests")
@@ -69,4 +69,4 @@ def serve(mesh_functions: Dict[str, Callable]=None):
 
 
 if __name__ == '__main__':
-    serve()
+    serve("wss://1d7af061725546779afb0f88f1577d45.s1.eu.hivemq.cloud", 8884)
