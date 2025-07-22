@@ -2,16 +2,18 @@
 requires = ["hatchling>=1.0.0"]
 build-backend = "hatchling.build_api"
 
-[tool.poetry]
+[project]
 name = "ascribe_link"
 version = "0.1.0"
 description = ""
 
-[tool.poetry.dependencies]
-python = "^3.9"
-numpy = "^1.20"
-pyvista = "^0.34"
-paho-mqtt = "^1.6"
+dependencies = [
+    "python>=3.9",
+    "numpy>=1.20",
+    "pyvista>=0.34",
+    "paho-mqtt>=1.6",
+]
 
-[tool.poetry.dev-dependencies]
-pytest = "^6.2"
+dev-dependencies = [
+    "pytest>=6.2",
+]
