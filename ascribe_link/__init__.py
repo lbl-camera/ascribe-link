@@ -1,0 +1,63 @@
+from ascribe_link.example import sphere_example
+import paho.mqtt.client as mqtt
+import numpy as np
+import json
+
+# Define the enumerated functions for data processing
+def random_mesh(*args, **kwargs):
+    # Implement processing logic here
+    return np.random.rand(10, 3)
+
+# Define a dictionary mapping function names to implementations
+function_map = {
+    'sphere': sphere_example,
+    'random_mesh': random_mesh
+}
+
+def validate_mesh(points, indices):
+    # Check for non-finite vertices
+    bad_points = np.array(points)[~np.isfinite(points).all(axis=1)]
+    if len(bad_points):
+        print("Bad points:", bad_points)
+        raise ValueError("Mesh contains points with infinite values")
+
+# Define a callback for incoming processing requests
+def on_message(client, userdata, message):
+    request_data = json.loads(message.payload)
+    print(client, userdata, request_data)
+    function_name = request_data['function_name']
+    args = request_data['args']
+    kwargs = request_data['kwargs']
+
+    # Call the corresponding function and serialize the result
+    result = function_map[function_name](*args, **kwargs)
+    result_data = {'vertices': result[0],
+                   'indices': result[1]}
+
+    # Validate before sending
+    validate_mesh(result[0], result[1])
+
+    # Publish the result to the processing responses topic
+    client.publish("python/processing_responses", json.dumps(result_data))
+
+# The callback for when the client receives a CONNACK response from the server.
+def on_connect(client, userdata, flags, reason_code, properties):
+    print(f"Connected with result code {reason_code}")
+    # Subscribing in on_connect() means that if we lose the connection and
+    # reconnect then subscriptions will be renewed.
+    client.subscribe("$SYS/#")
+
+if __name__ == '__main__':
+    # Connect to the MQTT broker
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    client.connect("localhost", 1883)
+
+    # Subscribe to the processing requests topic
+    client.subscribe("godot/processing_requests")
+
+    # Set the callback for incoming messages
+    client.on_message = on_message
+    client.on_connect = on_connect
+
+    # Start the MQTT loop
+    client.loop_forever()
