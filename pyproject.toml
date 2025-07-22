@@ -8,7 +8,6 @@ version = "0.1.0"
 description = ""
 
 dependencies = [
-    "python>=3.9",
     "numpy>=1.20",
     "pyvista>=0.34",
     "paho-mqtt>=1.6",
