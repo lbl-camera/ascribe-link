@@ -49,13 +49,14 @@ def on_connect(client, userdata, flags, reason_code, properties):
     # reconnect then subscriptions will be renewed.
     client.subscribe("$SYS/#")
 
-def serve(broker, port=1883, mesh_functions: Dict[str, Callable]=None):
+def serve(broker=None, port=1883, client=None, mesh_functions: Dict[str, Callable]=None):
     if mesh_functions:
         function_map.clear()
         function_map.update(mesh_functions)
 
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-    client.connect(broker, port)
+    if client is None:
+        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+        client.connect(broker, port)
 
     # Subscribe to the processing requests topic
     client.subscribe("godot/processing_requests")
