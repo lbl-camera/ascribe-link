@@ -1,3 +1,5 @@
+from typing import Callable, Sequence, Dict
+
 from .example import sphere_example
 import paho.mqtt.client as mqtt
 import numpy as np
@@ -47,10 +49,13 @@ def on_connect(client, userdata, flags, reason_code, properties):
     # reconnect then subscriptions will be renewed.
     client.subscribe("$SYS/#")
 
-if __name__ == '__main__':
-    # Connect to the MQTT broker
+def serve(mesh_functions: Dict[str, Callable]=None):
+    if mesh_functions:
+        function_map.clear()
+        function_map.update(mesh_functions)
+
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-    client.connect("localhost", 1883)
+    client.connect("mosquitto.doesliverpool.xyz", 1883)
 
     # Subscribe to the processing requests topic
     client.subscribe("godot/processing_requests")
@@ -61,3 +66,7 @@ if __name__ == '__main__':
 
     # Start the MQTT loop
     client.loop_forever()
+
+
+if __name__ == '__main__':
+    serve()
