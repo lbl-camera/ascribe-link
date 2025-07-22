@@ -1,4 +1,4 @@
-from ascribe_link.example import sphere_example
+from .example import sphere_example
 import paho.mqtt.client as mqtt
 import numpy as np
 import json
