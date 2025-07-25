@@ -1,9 +1,12 @@
+from itertools import chain
+from ssl import PROTOCOL_TLS
 from typing import Callable, Sequence, Dict
 
-from .example import sphere_example
 import paho.mqtt.client as mqtt
 import numpy as np
 import json
+
+from ascribe_link.example import sphere_example
 
 # Define the enumerated functions for data processing
 def random_mesh(*args, **kwargs):
@@ -33,7 +36,7 @@ def on_message(client, userdata, message):
 
     # Call the corresponding function and serialize the result
     result = function_map[function_name](*args, **kwargs)
-    result_data = {'vertices': result[0],
+    result_data = {'vertices': list(chain.from_iterable(result[0])),
                    'indices': result[1]}
 
     # Validate before sending
@@ -70,4 +73,9 @@ def serve(broker=None, port=1883, client=None, mesh_functions: Dict[str, Callabl
 
 
 if __name__ == '__main__':
-    serve("wss://1d7af061725546779afb0f88f1577d45.s1.eu.hivemq.cloud", 8884)
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)#protocol=mqtt.MQTTv5)#, transport="websockets")
+    client.tls_set(tls_version=PROTOCOL_TLS)
+    # client.ws_set_options(path="/mqtt")
+    client.username_pw_set("ascribe", "Ascribe1")
+    client.connect("1d7af061725546779afb0f88f1577d45.s1.eu.hivemq.cloud", 8883)
+    serve(client=client)
