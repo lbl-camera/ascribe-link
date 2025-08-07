@@ -28,22 +28,28 @@ def validate_mesh(points, indices):
 
 # Define a callback for incoming processing requests
 def on_message(client, userdata, message):
+    topic = message.topic
     request_data = json.loads(message.payload)
-    print(client, userdata, request_data)
-    function_name = request_data['function_name']
-    args = request_data['args']
-    kwargs = request_data['kwargs']
+    print(client, userdata, topic, request_data)
+    match topic:
+        case 'godot/processing_requests':
+            function_name = request_data['function_name']
+            args = request_data['args']
+            kwargs = request_data['kwargs']
 
-    # Call the corresponding function and serialize the result
-    result = function_map[function_name](*args, **kwargs)
-    result_data = {'vertices': list(chain.from_iterable(result[0])),
-                   'indices': result[1]}
+            # Call the corresponding function and serialize the result
+            result = function_map[function_name](*args, **kwargs)
+            result_data = {'vertices': list(chain.from_iterable(result[0])),
+                           'indices': result[1]}
 
-    # Validate before sending
-    validate_mesh(result[0], result[1])
+            # Validate before sending
+            validate_mesh(result[0], result[1])
 
-    # Publish the result to the processing responses topic
-    client.publish("python/processing_responses", json.dumps(result_data))
+            # Publish the result to the processing responses topic
+            client.publish("python/processing_responses", json.dumps(result_data))
+        case 'godot/specimen_requests':
+            function_names = list(function_map.keys())
+            client.publish("python/specimen_responses", json.dumps(function_names))5
 
 # The callback for when the client receives a CONNACK response from the server.
 def on_connect(client, userdata, flags, reason_code, properties):
@@ -63,6 +69,9 @@ def serve(broker=None, port=1883, client=None, mesh_functions: Dict[str, Callabl
 
     # Subscribe to the processing requests topic
     client.subscribe("godot/processing_requests")
+
+    # Subscribe to the specimen requests topic
+    client.subscribe("godot/specimen_requests")
 
     # Set the callback for incoming messages
     client.on_message = on_message
