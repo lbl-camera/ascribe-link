@@ -49,7 +49,7 @@ def on_message(client, userdata, message):
             client.publish("python/processing_responses", json.dumps(result_data))
         case 'godot/specimen_requests':
             function_names = list(function_map.keys())
-            client.publish("python/specimen_responses", json.dumps(function_names))5
+            client.publish("python/specimen_responses", json.dumps(function_names))
 
 # The callback for when the client receives a CONNACK response from the server.
 def on_connect(client, userdata, flags, reason_code, properties):
