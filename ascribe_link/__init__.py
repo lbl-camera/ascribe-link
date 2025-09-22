@@ -11,7 +11,7 @@ from ascribe_link.example import sphere_example
 # Define the enumerated functions for data processing
 def random_mesh(*args, **kwargs):
     # Implement processing logic here
-    return np.random.rand(10, 3)
+    return np.random.rand(10, 3), np.random.randint(10, (10, 3))
 
 # Define a dictionary mapping function names to implementations
 function_map = {
@@ -49,7 +49,8 @@ def on_message(client, userdata, message):
             client.publish("python/processing_responses", json.dumps(result_data))
         case 'godot/specimen_requests':
             function_names = list(function_map.keys())
-            client.publish("python/specimen_responses", json.dumps(function_names))
+            response = dict(names=function_names)
+            client.publish("python/specimen_responses", json.dumps(response))
 
 # The callback for when the client receives a CONNACK response from the server.
 def on_connect(client, userdata, flags, reason_code, properties):
@@ -82,9 +83,9 @@ def serve(broker=None, port=1883, client=None, mesh_functions: Dict[str, Callabl
 
 
 if __name__ == '__main__':
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)#protocol=mqtt.MQTTv5)#, transport="websockets")
-    client.tls_set(tls_version=PROTOCOL_TLS)
-    # client.ws_set_options(path="/mqtt")
-    client.username_pw_set("ascribe", "Ascribe1")
-    client.connect("1d7af061725546779afb0f88f1577d45.s1.eu.hivemq.cloud", 8883)
-    serve(client=client)
+    # Client setup
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)  # , transport="websockets")
+    client.connect("cam-web.lbl.gov", 1883)
+
+    # Start server
+    serve(client=client, mesh_functions={"Automated Thresholding":0, "Unsupervised ML":1, "Supervised ML":2})
