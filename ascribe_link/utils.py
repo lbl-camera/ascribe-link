@@ -22,6 +22,9 @@ def volume_to_mesh(volume, decimation=0.9):
     # Compute normals so that both vertices and facet normals are available.
     final_mesh = decimated_mesh.compute_normals()
 
+    # Flip normals
+    final_mesh.flip_normals()
+
     # extract data
     vertices = final_mesh.points.tolist()  # shape: (n_points, 3)
     faces = final_mesh.faces.reshape((-1, 4))  # first number is always 3 for triangle
