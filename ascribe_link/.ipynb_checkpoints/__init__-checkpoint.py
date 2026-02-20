@@ -36,7 +36,7 @@ def on_message(client, userdata, message):
             function_name = request_data['function_name']
             args = request_data['args']
             kwargs = request_data['kwargs']
- 
+
             # Call the corresponding function and serialize the result
             result = function_map[function_name](*args, **kwargs)
             result_data = {'vertices': list(chain.from_iterable(result[0])),
