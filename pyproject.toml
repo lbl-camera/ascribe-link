@@ -4,18 +4,25 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ascribe_link"
-version = "0.1.0"
-description = ""
-
-[tool.hatch.metadata]
-packages = ["ascribe_link"]
+version = "0.2.0"
+description = "Ascribe-Link: HTTP server bridging Python processing functions and curated specimens to Ascribe-XR"
+requires-python = ">=3.11"
 
 dependencies = [
     "numpy>=1.20",
     "pyvista>=0.34",
-    "paho-mqtt>=1.6",
+    "litestar[standard]>=2.0",
+    "Pillow>=9.0",
 ]
 
-dev-dependencies = [
+[project.optional-dependencies]
+dev = [
     "pytest>=6.2",
+    "httpx>=0.24",
 ]
+
+[project.scripts]
+ascribe-link = "ascribe_link.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ascribe_link"]

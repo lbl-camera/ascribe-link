@@ -1,0 +1,13 @@
+{
+    "id": "brain",
+    "display_name": "Brain",
+    "description": "Human brain from public domain, with triangulation suitable for 3D printing.",
+    "type": "mesh",
+    "data_file": "brain.stl",
+    "thumbnail_file": "thumbnail.png",
+    "story_text": [
+        "Human brain from public domain, with triangulation suitable to 3D printer.",
+        "https://www.embodi3d.com/"
+    ],
+    "tags": ["anatomy", "mesh"]
+}
