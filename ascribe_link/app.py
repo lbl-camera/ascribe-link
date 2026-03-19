@@ -9,7 +9,9 @@ from litestar import Litestar
 from litestar.config.cors import CORSConfig
 from litestar.di import Provide
 
+from ascribe_link.federation import FederationHub
 from ascribe_link.processing import FunctionRegistry
+from ascribe_link.routes.federation import FederationController
 from ascribe_link.routes.processing import ProcessingController
 from ascribe_link.routes.specimens import SpecimenController
 from ascribe_link.specimen_store import SpecimenStore
@@ -21,6 +23,7 @@ if TYPE_CHECKING:
 def create_app(
     specimens_dir: str | Path = "./specimens",
     mesh_functions: dict[str, Callable] | None = None,
+    relay_mode: bool = False,
 ) -> Litestar:
     """Create and configure the Litestar application.
 
@@ -30,6 +33,9 @@ def create_app(
         Path to the directory containing curated specimen bundles.
     mesh_functions:
         Optional dict of {name: callable} processing functions to register.
+    relay_mode:
+        If True, enable federation hub for accepting worker connections.
+        Workers can connect via WebSocket to register their specimens.
     """
     # --- Specimen store ---
     store = SpecimenStore(Path(specimens_dir))
@@ -47,6 +53,11 @@ def create_app(
         for name, func in mesh_functions.items():
             registry.register_function(func, name)
 
+    # --- Federation hub (relay mode only) ---
+    hub: FederationHub | None = None
+    if relay_mode:
+        hub = FederationHub()
+
     # --- Dependencies ---
     def provide_specimen_store() -> SpecimenStore:
         return store
@@ -54,11 +65,20 @@ def create_app(
     def provide_function_registry() -> FunctionRegistry:
         return registry
 
+    def provide_federation_hub() -> FederationHub | None:
+        return hub
+
+    # --- Route handlers ---
+    route_handlers = [SpecimenController, ProcessingController]
+    if relay_mode:
+        route_handlers.append(FederationController)
+
     app = Litestar(
-        route_handlers=[SpecimenController, ProcessingController],
+        route_handlers=route_handlers,
         dependencies={
             "specimen_store": Provide(provide_specimen_store, sync_to_thread=False),
             "function_registry": Provide(provide_function_registry, sync_to_thread=False),
+            "federation_hub": Provide(provide_federation_hub, sync_to_thread=False),
         },
         cors_config=CORSConfig(allow_origins=["*"]),
     )
