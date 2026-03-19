@@ -34,24 +34,33 @@ logger = logging.getLogger(__name__)
 # Mesh Generation Skill (system prompt for the agent)
 # ---------------------------------------------------------------------------
 
-MESH_GENERATION_SKILL = """# Mesh Generation Assistant
+MESH_GENERATION_SKILL = """# 3D Data Generation Assistant
 
-You are a mesh generation assistant for Ascribe-XR, a scientific visualization platform.
-Your job is to create 3D meshes based on user prompts.
+You are a data generation assistant for Ascribe-XR, a scientific visualization platform.
+Your job is to create 3D data (meshes or volumes) based on user prompts.
 
 ## Your Task
 
-Generate a 3D mesh and submit it using the `submit_mesh` tool. The mesh must be:
-- A list of vertices (each vertex is [x, y, z])
-- A list of triangle indices (flat list of vertex indices, every 3 indices form a triangle)
+Generate 3D data and submit it using either `submit_mesh` or `submit_volume`.
+
+### For Meshes (surfaces, objects):
+Use `submit_mesh` with:
+- vertices: list of [x, y, z] coordinate lists
+- indices: flat list of triangle vertex indices (every 3 = one face)
+
+### For Volumes (3D arrays, voxel data):
+Use `submit_volume` with:
+- shape: [depth, height, width] 
+- dtype: numpy dtype string (e.g., "float32", "uint8")
+- data: base64-encoded raw bytes
+- spacing: optional voxel spacing [sz, sy, sx]
 
 ## Tools Available
 
 You have access to standard tools (Read, Write, Bash) plus:
 
-- **submit_mesh**: Submit your final mesh. Call this when done.
-  - vertices: list of [x, y, z] coordinate lists
-  - indices: flat list of integers (every 3 = one triangle face)
+- **submit_mesh**: Submit a triangular mesh surface
+- **submit_volume**: Submit volumetric (voxel) data
 
 ## Environment
 
@@ -111,7 +120,7 @@ If a file path is provided, read it first to understand the data:
 Keep meshes reasonable in size (< 1M triangles) unless specifically requested.
 Ensure all coordinates are finite (no NaN or inf values).
 
-## Example: Simple Sphere
+## Example: Simple Sphere (Mesh)
 
 ```python
 import pyvista as pv
@@ -128,6 +137,32 @@ print("Mesh saved to /tmp/mesh_result.json")
 ```
 
 After running the code, read the JSON and call submit_mesh.
+
+## Example: Volume Data
+
+```python
+import numpy as np
+
+# Create a 3D sphere volume
+size = 64
+x, y, z = np.ogrid[-1:1:size*1j, -1:1:size*1j, -1:1:size*1j]
+volume = (x**2 + y**2 + z**2 < 0.5).astype(np.float32)
+
+# Save for submission
+import json
+import base64
+data = {
+    'type': 'volume',
+    'shape': list(volume.shape),
+    'dtype': str(volume.dtype),
+    'data': base64.b64encode(volume.tobytes()).decode('ascii'),
+    'spacing': [1.0, 1.0, 1.0]
+}
+with open('result.json', 'w') as f:
+    json.dump(data, f)
+```
+
+Then call submit_volume with the result, or read the JSON.
 """
 
 
@@ -136,10 +171,18 @@ After running the code, read the JSON and call submit_mesh.
 # ---------------------------------------------------------------------------
 
 @dataclass
-class MeshResult:
-    """Holds the mesh result from the agent."""
+class AgentResult:
+    """Holds the result from the agent (mesh or volume)."""
+    result_type: str | None = None  # "mesh" or "volume"
+    # Mesh data
     vertices: list[list[float]] | None = None
     indices: list[int] | None = None
+    # Volume data
+    volume_shape: list[int] | None = None
+    volume_dtype: str | None = None
+    volume_data: str | None = None  # base64
+    volume_spacing: list[float] | None = None
+    # Status
     error: str | None = None
     submitted: bool = False
 
@@ -148,7 +191,7 @@ class MeshResult:
 # Agent-based mesh generation
 # ---------------------------------------------------------------------------
 
-async def generate_mesh_with_agent(
+async def generate_with_agent(
     prompt: str,
     file_path: str | None = None,
     model: str = "claude-sonnet-4-20250514",
@@ -156,8 +199,8 @@ async def generate_mesh_with_agent(
     working_dir: str | None = None,
     sandbox: bool = True,
     sandbox_config: SandboxConfig | None = None,
-) -> tuple[list[list[float]], list[int]]:
-    """Generate a mesh using an AI agent.
+) -> dict[str, Any]:
+    """Generate data (mesh, volume, etc.) using an AI agent.
 
     Parameters
     ----------
@@ -178,14 +221,15 @@ async def generate_mesh_with_agent(
 
     Returns
     -------
-    tuple[list[list[float]], list[int]]
-        (vertices, indices) where vertices is a list of [x,y,z] coords
-        and indices is a flat list of triangle vertex indices.
-
+    dict
+        Result dictionary with 'type' field indicating the data type:
+        - "mesh": contains vertices, indices
+        - "volume": contains shape, dtype, data (base64), spacing
+        
     Raises
     ------
     ValueError
-        If the agent fails to produce a valid mesh.
+        If the agent fails to produce valid data.
     TimeoutError
         If the agent exceeds the timeout.
     """
@@ -201,7 +245,7 @@ async def generate_mesh_with_agent(
         create_sdk_mcp_server,
     )
 
-    result = MeshResult()
+    result = AgentResult()
     sandbox_config = sandbox_config or SandboxConfig()
     
     # Check sandbox availability
@@ -212,7 +256,7 @@ async def generate_mesh_with_agent(
     # Define the submit_mesh tool
     @tool(
         "submit_mesh",
-        "Submit the generated mesh. Call this when your mesh is ready.",
+        "Submit a generated mesh. Call this when your mesh is ready.",
         {
             "vertices": list,  # list of [x, y, z] coordinates
             "indices": list,   # flat list of triangle indices
@@ -246,6 +290,7 @@ async def generate_mesh_with_agent(
         if len(indices) % 3 != 0:
             return {"content": [{"type": "text", "text": "Error: indices length must be divisible by 3 (triangles)"}]}
 
+        result.result_type = "mesh"
         result.vertices = vertices
         result.indices = indices
         result.submitted = True
@@ -257,11 +302,61 @@ async def generate_mesh_with_agent(
             }]
         }
 
-    # Create MCP server with our tool
+    # Define the submit_volume tool
+    @tool(
+        "submit_volume",
+        "Submit generated volumetric data. Call this when your 3D volume is ready.",
+        {
+            "shape": list,    # [depth, height, width] or [z, y, x]
+            "dtype": str,     # numpy dtype string, e.g. "float32"
+            "data": str,      # base64-encoded raw bytes
+            "spacing": list,  # optional voxel spacing [sz, sy, sx]
+        }
+    )
+    async def submit_volume(args: dict) -> dict:
+        """Capture the volume submitted by the agent."""
+        shape = args.get("shape", [])
+        dtype = args.get("dtype", "float32")
+        data = args.get("data", "")
+        spacing = args.get("spacing")
+
+        # Validate
+        if not shape or len(shape) != 3:
+            return {"content": [{"type": "text", "text": "Error: shape must be [depth, height, width]"}]}
+        if not data:
+            return {"content": [{"type": "text", "text": "Error: data is empty"}]}
+
+        # Validate base64
+        import base64
+        try:
+            decoded = base64.b64decode(data)
+            import numpy as np
+            expected_size = np.prod(shape) * np.dtype(dtype).itemsize
+            if len(decoded) != expected_size:
+                return {"content": [{"type": "text", "text": f"Error: data size mismatch. Expected {expected_size} bytes, got {len(decoded)}"}]}
+        except Exception as e:
+            return {"content": [{"type": "text", "text": f"Error decoding data: {e}"}]}
+
+        result.result_type = "volume"
+        result.volume_shape = shape
+        result.volume_dtype = dtype
+        result.volume_data = data
+        result.volume_spacing = spacing
+        result.submitted = True
+
+        total_voxels = shape[0] * shape[1] * shape[2]
+        return {
+            "content": [{
+                "type": "text",
+                "text": f"Volume submitted successfully: {shape} ({total_voxels:,} voxels, {dtype})"
+            }]
+        }
+
+    # Create MCP server with our tools
     mesh_server = create_sdk_mcp_server(
         name="mesh-tools",
         version="1.0.0",
-        tools=[submit_mesh],
+        tools=[submit_mesh, submit_volume],
     )
 
     # Set up working directory
@@ -336,13 +431,14 @@ async def generate_mesh_with_agent(
             "Write", 
             "Bash",
             "mcp__mesh__submit_mesh",
+            "mcp__mesh__submit_volume",
         ],
         permission_mode="acceptEdits",
-        max_turns=50,  # Reasonable limit for mesh generation
+        max_turns=50,  # Reasonable limit for generation
         hooks=hooks if hooks else None,
     )
 
-    logger.info("Starting mesh generation agent: %s", prompt[:100])
+    logger.info("Starting generation agent: %s", prompt[:100])
 
     try:
         async with ClaudeSDKClient(options=options) as client:
@@ -373,15 +469,37 @@ async def generate_mesh_with_agent(
         raise
 
     if not result.submitted:
-        raise ValueError("Agent did not submit a mesh. It may have encountered an error.")
+        raise ValueError("Agent did not submit any data. It may have encountered an error.")
 
-    logger.info(
-        "Mesh generated: %d vertices, %d triangles",
-        len(result.vertices),
-        len(result.indices) // 3,
-    )
-
-    return result.vertices, result.indices
+    # Build result dictionary based on type
+    if result.result_type == "mesh":
+        logger.info(
+            "Mesh generated: %d vertices, %d triangles",
+            len(result.vertices),
+            len(result.indices) // 3,
+        )
+        return {
+            "type": "mesh",
+            "vertices": result.vertices,
+            "indices": result.indices,
+        }
+    elif result.result_type == "volume":
+        logger.info(
+            "Volume generated: %s (%s)",
+            result.volume_shape,
+            result.volume_dtype,
+        )
+        output = {
+            "type": "volume",
+            "shape": result.volume_shape,
+            "dtype": result.volume_dtype,
+            "data": result.volume_data,
+        }
+        if result.volume_spacing:
+            output["spacing"] = result.volume_spacing
+        return output
+    else:
+        raise ValueError(f"Unknown result type: {result.result_type}")
 
 
 # ---------------------------------------------------------------------------
@@ -394,7 +512,7 @@ def create_agent_function(
     sandbox: bool = True,
     sandbox_config: SandboxConfig | None = None,
 ):
-    """Create an agent-based mesh generation function for the registry.
+    """Create an agent-based generation function for the registry.
 
     Parameters
     ----------
@@ -415,26 +533,27 @@ def create_agent_function(
     async def agent_generate(
         prompt: str,
         file_path: str | None = None,
-    ) -> tuple[list, list]:
-        """Generate a mesh using an AI agent.
+    ) -> dict[str, Any]:
+        """Generate data (mesh, volume, etc.) using an AI agent.
 
         Parameters
         ----------
         prompt : str
             Natural language description of what to generate.
             Examples:
-            - "Create a DNA double helix"
+            - "Create a DNA double helix mesh"
             - "Generate a torus with major radius 2 and minor radius 0.5"
+            - "Create a 64x64x64 volume with a sphere in the center"
             - "Process this volume data with marching cubes at threshold 0.5"
         file_path : str, optional
             Path to an input data file for the agent to process.
 
         Returns
         -------
-        tuple[list, list]
-            (vertices, indices) mesh data.
+        dict
+            Result with 'type' field ("mesh" or "volume") and corresponding data.
         """
-        return await generate_mesh_with_agent(
+        return await generate_with_agent(
             prompt=prompt,
             file_path=file_path,
             model=model,
@@ -444,3 +563,7 @@ def create_agent_function(
         )
 
     return agent_generate
+
+
+# Backwards compatibility alias
+generate_mesh_with_agent = generate_with_agent
