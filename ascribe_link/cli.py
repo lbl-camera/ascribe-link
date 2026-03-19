@@ -55,6 +55,24 @@ def main() -> None:
         "--verbose", "-v", action="store_true", help="Enable verbose logging"
     )
 
+    # AI agent options
+    parser.add_argument(
+        "--enable-agent",
+        action="store_true",
+        help="Enable AI agent-based mesh generation (requires claude-agent-sdk)",
+    )
+    parser.add_argument(
+        "--agent-model",
+        default="claude-sonnet-4-20250514",
+        help="Claude model for agent generation (default: claude-sonnet-4-20250514)",
+    )
+    parser.add_argument(
+        "--agent-timeout",
+        type=float,
+        default=300.0,
+        help="Timeout in seconds for agent generation (default: 300)",
+    )
+
     args = parser.parse_args()
 
     # Configure logging
@@ -83,6 +101,9 @@ def run_server_mode(args: argparse.Namespace) -> None:
     app = create_app(
         specimens_dir=args.specimens_dir,
         relay_mode=args.relay,
+        enable_agent=args.enable_agent,
+        agent_model=args.agent_model,
+        agent_timeout=args.agent_timeout,
     )
     uvicorn.run(app, host=args.host, port=args.port, reload=args.reload)
 

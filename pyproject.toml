@@ -17,6 +17,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+agent = [
+    "claude-agent-sdk>=0.1.0",
+]
 dev = [
     "pytest>=6.2",
     "httpx>=0.24",

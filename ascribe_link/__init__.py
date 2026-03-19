@@ -12,3 +12,10 @@ __all__ = [
     "FunctionRegistry",
     "SpecimenStore",
 ]
+
+# Optional: agent generator (requires claude-agent-sdk)
+try:
+    from ascribe_link.agent_generator import generate_mesh_with_agent, create_agent_function
+    __all__.extend(["generate_mesh_with_agent", "create_agent_function"])
+except ImportError:
+    pass
