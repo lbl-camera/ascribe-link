@@ -2,6 +2,12 @@
 
 Provides an agent that can generate 3D meshes from natural language prompts,
 optionally processing input data files.
+
+Code execution is sandboxed via Firejail when available, providing:
+- Filesystem isolation
+- Network isolation  
+- Resource limits (memory, CPU time)
+- Capability dropping and seccomp filtering
 """
 
 from __future__ import annotations
@@ -9,10 +15,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from ascribe_link.sandbox import (
+    SandboxConfig,
+    is_firejail_available,
+    build_firejail_command,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +52,13 @@ You have access to standard tools (Read, Write, Bash) plus:
 - **submit_mesh**: Submit your final mesh. Call this when done.
   - vertices: list of [x, y, z] coordinate lists
   - indices: flat list of integers (every 3 = one triangle face)
+
+## Environment
+
+- Bash commands run in a sandboxed environment (isolated filesystem, no network)
+- All work happens in the current working directory
+- Input files are copied to the working directory
+- PyVista, NumPy, SciPy, and scikit-image are available
 
 ## Recommended Libraries
 
@@ -134,6 +154,8 @@ async def generate_mesh_with_agent(
     model: str = "claude-sonnet-4-20250514",
     timeout: float = 300.0,
     working_dir: str | None = None,
+    sandbox: bool = True,
+    sandbox_config: SandboxConfig | None = None,
 ) -> tuple[list[list[float]], list[int]]:
     """Generate a mesh using an AI agent.
 
@@ -149,6 +171,10 @@ async def generate_mesh_with_agent(
         Maximum time in seconds to wait for the agent.
     working_dir : str, optional
         Working directory for the agent. Defaults to a temp directory.
+    sandbox : bool
+        If True, wrap Bash commands in Firejail sandbox.
+    sandbox_config : SandboxConfig, optional
+        Configuration for sandbox. Uses defaults if None.
 
     Returns
     -------
@@ -170,11 +196,18 @@ async def generate_mesh_with_agent(
         ResultMessage,
         TextBlock,
         ToolResultBlock,
+        HookMatcher,
         tool,
         create_sdk_mcp_server,
     )
 
     result = MeshResult()
+    sandbox_config = sandbox_config or SandboxConfig()
+    
+    # Check sandbox availability
+    use_sandbox = sandbox and is_firejail_available()
+    if sandbox and not use_sandbox:
+        logger.warning("Firejail not available, running without sandbox")
 
     # Define the submit_mesh tool
     @tool(
@@ -234,11 +267,63 @@ async def generate_mesh_with_agent(
     # Set up working directory
     if working_dir is None:
         working_dir = tempfile.mkdtemp(prefix="ascribe_agent_")
+    
+    working_dir_path = Path(working_dir)
 
     # Build the user prompt
     user_prompt = prompt
     if file_path:
-        user_prompt = f"Input file: {file_path}\n\n{prompt}"
+        # Copy input file to working directory
+        file_path_obj = Path(file_path)
+        if file_path_obj.exists():
+            dest = working_dir_path / file_path_obj.name
+            shutil.copy2(file_path_obj, dest)
+            user_prompt = f"Input file: {dest.name}\n\n{prompt}"
+        else:
+            user_prompt = f"Input file (not found): {file_path}\n\n{prompt}"
+
+    # Create a hook that wraps Bash commands in Firejail
+    async def sandbox_bash_hook(input_data: dict, tool_use_id: str, context: dict) -> dict:
+        """Intercept Bash commands and wrap them in Firejail."""
+        tool_name = input_data.get("tool_name", "")
+        tool_input = input_data.get("tool_input", {})
+        
+        if tool_name != "Bash" or not use_sandbox:
+            return {}  # Allow through unchanged
+        
+        command = tool_input.get("command", "")
+        if not command:
+            return {}
+        
+        # Build Firejail-wrapped command
+        # The command runs in the working directory which Firejail will isolate
+        firejail_cmd = build_firejail_command(
+            command=["bash", "-c", command],
+            working_dir=working_dir_path,
+            config=sandbox_config,
+        )
+        
+        # Replace the command with the sandboxed version
+        sandboxed_command = " ".join(f'"{arg}"' if " " in arg else arg for arg in firejail_cmd)
+        
+        logger.debug("Sandboxing Bash command: %s -> firejail ...", command[:50])
+        
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "toolInput": {
+                    "command": sandboxed_command,
+                },
+            }
+        }
+
+    # Configure hooks
+    hooks = {}
+    if use_sandbox:
+        hooks["PreToolUse"] = [
+            HookMatcher(matcher="Bash", hooks=[sandbox_bash_hook]),
+        ]
+        logger.info("Sandbox enabled for Bash commands (Firejail)")
 
     # Configure agent options
     options = ClaudeAgentOptions(
@@ -254,6 +339,7 @@ async def generate_mesh_with_agent(
         ],
         permission_mode="acceptEdits",
         max_turns=50,  # Reasonable limit for mesh generation
+        hooks=hooks if hooks else None,
     )
 
     logger.info("Starting mesh generation agent: %s", prompt[:100])
@@ -305,6 +391,8 @@ async def generate_mesh_with_agent(
 def create_agent_function(
     model: str = "claude-sonnet-4-20250514",
     timeout: float = 300.0,
+    sandbox: bool = True,
+    sandbox_config: SandboxConfig | None = None,
 ):
     """Create an agent-based mesh generation function for the registry.
 
@@ -314,6 +402,10 @@ def create_agent_function(
         Default Claude model to use.
     timeout : float
         Default timeout in seconds.
+    sandbox : bool
+        If True, wrap Bash commands in Firejail sandbox.
+    sandbox_config : SandboxConfig, optional
+        Configuration for sandbox limits.
 
     Returns
     -------
@@ -347,6 +439,8 @@ def create_agent_function(
             file_path=file_path,
             model=model,
             timeout=timeout,
+            sandbox=sandbox,
+            sandbox_config=sandbox_config,
         )
 
     return agent_generate

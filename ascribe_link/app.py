@@ -70,13 +70,17 @@ def create_app(
     if enable_agent:
         try:
             from ascribe_link.agent_generator import create_agent_function
+            from ascribe_link.sandbox import is_firejail_available
 
             agent_func = create_agent_function(
                 model=agent_model,
                 timeout=agent_timeout,
+                sandbox=True,  # Always try to sandbox
             )
             registry.register_function(agent_func, "ai_generate")
-            logger.info("AI agent generation enabled (model=%s)", agent_model)
+            
+            sandbox_status = "enabled" if is_firejail_available() else "disabled (firejail not found)"
+            logger.info("AI agent generation enabled (model=%s, sandbox=%s)", agent_model, sandbox_status)
         except ImportError as e:
             logger.warning(
                 "AI agent generation disabled: claude-agent-sdk not installed (%s)", e

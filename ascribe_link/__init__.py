@@ -3,6 +3,12 @@
 from ascribe_link.app import create_app
 from ascribe_link.federation import FederationClient, FederationHub
 from ascribe_link.processing import FunctionRegistry
+from ascribe_link.sandbox import (
+    SandboxConfig,
+    SandboxResult,
+    is_firejail_available,
+    run_sandboxed,
+)
 from ascribe_link.specimen_store import SpecimenStore
 
 __all__ = [
@@ -10,7 +16,11 @@ __all__ = [
     "FederationClient",
     "FederationHub",
     "FunctionRegistry",
+    "SandboxConfig",
+    "SandboxResult",
     "SpecimenStore",
+    "is_firejail_available",
+    "run_sandboxed",
 ]
 
 # Optional: agent generator (requires claude-agent-sdk)
