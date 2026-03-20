@@ -344,6 +344,7 @@ class ProcessingRequest:
     function_name: str
     args: list[Any] = field(default_factory=list)
     kwargs: dict[str, Any] = field(default_factory=dict)
+    room_id: str = "ascribe"  # Room identifier for multiplayer caching
 
 
 @dataclass

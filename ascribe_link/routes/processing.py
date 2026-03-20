@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from litestar import Controller, get, post
 from litestar.exceptions import NotFoundException
 
+from ascribe_link.cache import RoomResultCache
 from ascribe_link.models import (
     FunctionInfo,
     ProcessingRequest,
     result_to_dict,
 )
 from ascribe_link.processing import FunctionRegistry
+
+logger = logging.getLogger(__name__)
 
 
 class ProcessingController(Controller):
@@ -41,9 +45,25 @@ class ProcessingController(Controller):
     async def invoke_function(
         self,
         function_registry: FunctionRegistry,
+        result_cache: RoomResultCache,
         data: ProcessingRequest,
     ) -> dict[str, Any]:
         """Invoke a processing function and return the result.
+
+        Supports multiplayer caching via room_id. If multiple peers in the same room
+        request the same function with the same parameters, the result is cached and
+        reused. When a new request comes in for a room, the old cache entry is
+        invalidated (since the new specimen replaces the old one for all peers).
+
+        Request body:
+        ```json
+        {
+            "function_name": "generate_sphere",
+            "args": [],
+            "kwargs": {"radius": 2.0, "resolution": 64},
+            "room_id": "ascribe"  // optional, defaults to "ascribe"
+        }
+        ```
 
         The response always includes a 'type' field indicating the data type:
         - "mesh": vertices, indices, optional normals
@@ -59,25 +79,35 @@ class ProcessingController(Controller):
             "indices": [i1, i2, i3, ...]
         }
         ```
-
-        Example volume response:
-        ```json
-        {
-            "type": "volume",
-            "shape": [64, 64, 64],
-            "dtype": "float32",
-            "data": "<base64-encoded bytes>",
-            "spacing": [1.0, 1.0, 1.0]
-        }
-        ```
         """
+        room_id = data.room_id or "ascribe"
+        
+        # Check cache first
+        cached_result = result_cache.get(room_id, data.function_name, data.kwargs)
+        if cached_result is not None:
+            logger.info(
+                "Cache hit: room=%s, function=%s, params=%s",
+                room_id,
+                data.function_name,
+                list(data.kwargs.keys()),
+            )
+            return cached_result
+        
+        logger.info(
+            "Cache miss: room=%s, function=%s, params=%s - computing result",
+            room_id,
+            data.function_name,
+            list(data.kwargs.keys()),
+        )
+        
+        # Compute result
         try:
             result = await function_registry.invoke_async(
                 data.function_name,
                 data.args,
                 data.kwargs,
             )
-            return result_to_dict(result)
+            result_dict = result_to_dict(result)
         except KeyError:
             raise NotFoundException(detail=f"Function not found: {data.function_name}")
         except TypeError as e:
@@ -88,5 +118,37 @@ class ProcessingController(Controller):
                     data.args,
                     data.kwargs,
                 )
-                return result_to_dict(result)
-            raise
+                result_dict = result_to_dict(result)
+            else:
+                raise
+        
+        # Cache the result
+        result_cache.put(room_id, data.function_name, data.kwargs, result_dict)
+        logger.info(
+            "Cached result: room=%s, function=%s, vertices=%d",
+            room_id,
+            data.function_name,
+            len(result_dict.get("vertices", [])) if result_dict.get("type") == "mesh" else 0,
+        )
+        
+        return result_dict
+
+    @get("/cache/stats")
+    async def cache_stats(self, result_cache: RoomResultCache) -> dict[str, Any]:
+        """Get cache statistics for debugging.
+
+        Returns information about cached results per room, including:
+        - Total entries
+        - TTL configuration
+        - Per-room details (function, age, access count)
+        """
+        return result_cache.stats()
+
+    @post("/cache/clear")
+    async def clear_cache(self, result_cache: RoomResultCache) -> dict[str, str]:
+        """Clear all cached results.
+
+        Useful for testing or forcing recomputation.
+        """
+        result_cache.clear()
+        return {"status": "cleared"}

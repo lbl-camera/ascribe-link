@@ -10,6 +10,7 @@ from litestar import Litestar
 from litestar.config.cors import CORSConfig
 from litestar.di import Provide
 
+from ascribe_link.cache import RoomResultCache
 from ascribe_link.federation import FederationHub
 from ascribe_link.processing import FunctionRegistry
 from ascribe_link.routes.federation import FederationController
@@ -94,6 +95,10 @@ def create_app(
     if relay_mode:
         hub = FederationHub()
 
+    # --- Result cache for multiplayer ---
+    result_cache = RoomResultCache(ttl_seconds=300.0)  # 5 minute TTL
+    logger.info("Room result cache enabled (TTL=300s)")
+
     # --- Dependencies ---
     def provide_specimen_store() -> SpecimenStore:
         return store
@@ -103,6 +108,9 @@ def create_app(
 
     def provide_federation_hub() -> FederationHub | None:
         return hub
+
+    def provide_result_cache() -> RoomResultCache:
+        return result_cache
 
     # --- Route handlers ---
     route_handlers = [SpecimenController, ProcessingController]
@@ -115,6 +123,7 @@ def create_app(
             "specimen_store": Provide(provide_specimen_store, sync_to_thread=False),
             "function_registry": Provide(provide_function_registry, sync_to_thread=False),
             "federation_hub": Provide(provide_federation_hub, sync_to_thread=False),
+            "result_cache": Provide(provide_result_cache, sync_to_thread=False),
         },
         cors_config=CORSConfig(allow_origins=["*"]),
     )
