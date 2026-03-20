@@ -70,6 +70,57 @@ async def test_dynamic_specimen():
             print(f"   ERROR: {response.status_code}")
             print(f"   {response.text}")
 
+        print("\n6. Testing cache behavior (invoke same request twice) ...")
+        # First request - should miss cache
+        response1 = await client.post(
+            f"{base_url}/api/processing/invoke",
+            json={
+                "function_name": "generate_sphere",
+                "args": [],
+                "kwargs": {"radius": 1.5, "resolution": 32},
+                "room_id": "test_room"
+            }
+        )
+        print(f"   First request: {response1.status_code}")
+        
+        # Second request - should hit cache
+        response2 = await client.post(
+            f"{base_url}/api/processing/invoke",
+            json={
+                "function_name": "generate_sphere",
+                "args": [],
+                "kwargs": {"radius": 1.5, "resolution": 32},
+                "room_id": "test_room"
+            }
+        )
+        print(f"   Second request (same params): {response2.status_code}")
+        
+        # Check results are identical
+        if response1.json() == response2.json():
+            print("   ✅ Cache working: identical results")
+        
+        # Different params - should invalidate cache
+        response3 = await client.post(
+            f"{base_url}/api/processing/invoke",
+            json={
+                "function_name": "generate_sphere",
+                "args": [],
+                "kwargs": {"radius": 2.0, "resolution": 32},
+                "room_id": "test_room"
+            }
+        )
+        print(f"   Third request (different params): {response3.status_code}")
+
+        print("\n7. Testing GET /api/processing/cache/stats ...")
+        response = await client.get(f"{base_url}/api/processing/cache/stats")
+        if response.status_code == 200:
+            stats = response.json()
+            print(f"   Cache entries: {stats.get('total_entries')}")
+            for entry in stats.get("entries", []):
+                print(f"     - Room: {entry['room_id']}, Function: {entry['function_name']}, Accesses: {entry['access_count']}")
+        else:
+            print(f"   ERROR: {response.status_code}")
+
         print("\n✅ All tests completed!")
 
 
