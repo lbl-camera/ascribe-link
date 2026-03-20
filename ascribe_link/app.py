@@ -56,10 +56,13 @@ def create_app(
     # --- Function registry ---
     registry = FunctionRegistry()
 
-    # Register built-in example
+    # Register built-in examples
     from ascribe_link.example import sphere_example
+    from ascribe_link.parametric import generate_sphere, generate_torus
 
     registry.register_function(sphere_example, "sphere")
+    registry.register_function(generate_sphere, "generate_sphere", return_type="mesh")
+    registry.register_function(generate_torus, "generate_torus", return_type="mesh")
 
     # Register user-provided functions
     if mesh_functions:
