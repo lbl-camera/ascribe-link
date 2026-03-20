@@ -27,6 +27,8 @@ class SpecimenMetadata:
     thumbnail_file: str = ""  # filename within the specimen directory
     story_text: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
+    schema: dict[str, Any] | None = None  # JSON Schema for dynamic specimens
+    function_name: str | None = None  # Function to invoke for dynamic specimens
 
 
 @dataclass
@@ -39,6 +41,7 @@ class SpecimenListItem:
     type: SpecimenType
     thumbnail_url: str
     tags: list[str] = field(default_factory=list)
+    is_dynamic: bool = False  # True if specimen has parameters (schema != None)
 
 
 # ---------------------------------------------------------------------------

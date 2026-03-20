@@ -101,4 +101,6 @@ class SpecimenStore:
             thumbnail_file=raw.get("thumbnail_file", ""),
             story_text=raw.get("story_text", []),
             tags=raw.get("tags", []),
+            schema=raw.get("schema"),
+            function_name=raw.get("function_name"),
         )

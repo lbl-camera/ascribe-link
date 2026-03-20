@@ -44,6 +44,7 @@ class SpecimenController(Controller):
                     type=meta.type,
                     thumbnail_url=f"/api/specimens/{meta.id}/thumbnail",
                     tags=meta.tags,
+                    is_dynamic=meta.schema is not None,
                 )
             )
 
