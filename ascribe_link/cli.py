@@ -27,8 +27,8 @@ def main() -> None:
     parser.add_argument(
         "--specimens-dir",
         type=Path,
-        default=Path("./specimens"),
-        help="Path to specimens directory (default: ./specimens)",
+        default=None,
+        help="Path to specimens directory (default: ./specimens relative to repo root)",
     )
     parser.add_argument(
         "--reload", action="store_true", help="Enable auto-reload for development"
@@ -97,6 +97,14 @@ def run_server_mode(args: argparse.Namespace) -> None:
 
     mode = "relay" if args.relay else "standalone"
     logging.info(f"Starting Ascribe-Link in {mode} mode")
+    
+    # If specimens_dir not specified, default to repo root / specimens
+    if args.specimens_dir is None:
+        import ascribe_link
+        module_path = Path(ascribe_link.__file__).parent
+        repo_root = module_path.parent
+        args.specimens_dir = repo_root / "specimens"
+        logging.info(f"Using default specimens directory: {args.specimens_dir}")
 
     app = create_app(
         specimens_dir=args.specimens_dir,
