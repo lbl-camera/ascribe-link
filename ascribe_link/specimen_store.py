@@ -32,27 +32,47 @@ class SpecimenStore:
 
     def reload(self) -> None:
         """(Re-)scan the specimen directory and rebuild the cache."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         self._cache.clear()
-        if not self._root.is_dir():
+        logger.info(f"Scanning specimen directory: {self._root.absolute()}")
+        
+        if not self._root.exists():
+            logger.warning(f"Specimen directory does not exist: {self._root.absolute()}")
             return
-        for child in sorted(self._root.iterdir()):
+        
+        if not self._root.is_dir():
+            logger.warning(f"Specimen path is not a directory: {self._root.absolute()}")
+            return
+        
+        children = list(self._root.iterdir())
+        logger.info(f"Found {len(children)} items in specimen directory")
+        
+        for child in sorted(children):
+            logger.debug(f"Checking: {child.name}")
             if not child.is_dir():
+                logger.debug(f"  Skipping (not a directory): {child.name}")
                 continue
             meta_path = child / "specimen.json"
             if not meta_path.exists():
+                logger.debug(f"  Skipping (no specimen.json): {child.name}")
                 continue
             try:
                 meta = self._load_metadata(child.name, meta_path)
                 self._cache[meta.id] = meta
+                logger.info(f"  Loaded specimen: {meta.id} ({meta.display_name})")
             except Exception as exc:  # noqa: BLE001
-                import logging
-
                 logging.getLogger(__name__).warning(
                     "Skipping specimen %s: %s", child.name, exc
                 )
 
     def list(self) -> list[SpecimenMetadata]:
-        return list(self._cache.values())
+        import logging
+        logger = logging.getLogger(__name__)
+        result = list(self._cache.values())
+        logger.info(f"SpecimenStore.list() returning {len(result)} specimens")
+        return result
 
     def get(self, specimen_id: str) -> SpecimenMetadata | None:
         return self._cache.get(specimen_id)
