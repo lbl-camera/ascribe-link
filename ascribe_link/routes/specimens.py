@@ -5,18 +5,15 @@ from __future__ import annotations
 import base64
 import mimetypes
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from litestar import Controller, Response, get
 from litestar.di import Provide
 from litestar.exceptions import NotFoundException
 from litestar.response import File
 
+from ascribe_link.federation import FederationHub
 from ascribe_link.models import SpecimenListItem, SpecimenMetadata, SpecimenType
 from ascribe_link.specimen_store import SpecimenStore
-
-if TYPE_CHECKING:
-    from ascribe_link.federation import FederationHub
 
 
 class SpecimenController(Controller):
@@ -26,7 +23,7 @@ class SpecimenController(Controller):
     async def list_specimens(
         self,
         specimen_store: SpecimenStore,
-        federation_hub: "FederationHub | None" = None,
+        federation_hub: FederationHub | None = None,
     ) -> list[SpecimenListItem]:
         """List all curated specimens with names and thumbnail URLs.
 
@@ -71,7 +68,7 @@ class SpecimenController(Controller):
         self,
         specimen_store: SpecimenStore,
         specimen_id: str,
-        federation_hub: "FederationHub | None" = None,
+        federation_hub: FederationHub | None = None,
     ) -> SpecimenMetadata:
         """Get full metadata for a specimen."""
         # Check if this is a federated specimen (worker_id:specimen_id)
@@ -104,7 +101,7 @@ class SpecimenController(Controller):
         self,
         specimen_store: SpecimenStore,
         specimen_id: str,
-        federation_hub: "FederationHub | None" = None,
+        federation_hub: FederationHub | None = None,
     ) -> Response | File:
         """Serve the thumbnail image for a specimen."""
         # Check if this is a federated specimen
@@ -143,7 +140,7 @@ class SpecimenController(Controller):
         self,
         specimen_store: SpecimenStore,
         specimen_id: str,
-        federation_hub: "FederationHub | None" = None,
+        federation_hub: FederationHub | None = None,
     ) -> Response | File:
         """Serve the specimen data file (mesh, volume, etc.)."""
         # Check if this is a federated specimen
