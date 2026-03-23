@@ -128,6 +128,12 @@ def create_app(
     if relay_mode:
         route_handlers.append(FederationController)
 
+    # --- Exception handler for debugging ---
+    async def log_exception_handler(request, exc: Exception) -> dict:
+        import traceback
+        logger.error("Unhandled exception: %s\n%s", exc, traceback.format_exc())
+        raise exc  # Re-raise to let Litestar handle the response
+
     app = Litestar(
         route_handlers=route_handlers,
         dependencies={
@@ -137,6 +143,8 @@ def create_app(
             "result_cache": Provide(provide_result_cache, sync_to_thread=False),
         },
         cors_config=CORSConfig(allow_origins=["*"]),
+        exception_handlers={Exception: log_exception_handler},
+        debug=True,
     )
 
     return app

@@ -82,6 +82,14 @@ class ProcessingController(Controller):
         """
         room_id = data.room_id or "ascribe"
         
+        logger.info(
+            "invoke_function: function=%s, args=%s, kwargs=%s, room_id=%s",
+            data.function_name,
+            data.args,
+            data.kwargs,
+            room_id,
+        )
+        
         # Check cache first
         cached_result = result_cache.get(room_id, data.function_name, data.kwargs)
         if cached_result is not None:
