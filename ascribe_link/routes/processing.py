@@ -121,6 +121,10 @@ class ProcessingController(Controller):
                 result_dict = result_to_dict(result)
             else:
                 raise
+        except Exception as e:
+            import traceback
+            logger.error("Error invoking %s: %s\n%s", data.function_name, e, traceback.format_exc())
+            raise
         
         # Cache the result
         result_cache.put(room_id, data.function_name, data.kwargs, result_dict)
