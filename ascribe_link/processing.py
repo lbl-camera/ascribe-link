@@ -93,11 +93,14 @@ class FunctionRegistry:
         if func is None:
             raise KeyError(f"Unknown function: {name}")
 
+        # Coerce kwargs to match function signature types (e.g., float -> int)
+        kwargs = self._coerce_kwargs(func, kwargs or {})
+
         # Call function (handle both sync and async)
         if asyncio.iscoroutinefunction(func):
-            result = await func(*(args or []), **(kwargs or {}))
+            result = await func(*(args or []), **kwargs)
         else:
-            result = func(*(args or []), **(kwargs or {}))
+            result = func(*(args or []), **kwargs)
 
         # Convert raw result to typed result
         return self._convert_result(result, self._return_types.get(name))
@@ -121,8 +124,32 @@ class FunctionRegistry:
                 f"Function '{name}' is async. Use invoke_async() instead."
             )
 
-        result = func(*(args or []), **(kwargs or {}))
+        # Coerce kwargs to match function signature types (e.g., float -> int)
+        kwargs = self._coerce_kwargs(func, kwargs or {})
+
+        result = func(*(args or []), **kwargs)
         return self._convert_result(result, self._return_types.get(name))
+
+    def _coerce_kwargs(self, func: Callable, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Coerce kwargs to match function signature types.
+        
+        Handles common cases like float -> int when the signature expects int.
+        """
+        try:
+            hints = get_type_hints(func)
+        except Exception:
+            return kwargs
+        
+        coerced = {}
+        for key, value in kwargs.items():
+            expected_type = hints.get(key)
+            if expected_type is int and isinstance(value, float):
+                coerced[key] = int(value)
+            elif expected_type is bool and isinstance(value, (int, float)):
+                coerced[key] = bool(value)
+            else:
+                coerced[key] = value
+        return coerced
 
     def _convert_result(
         self,
