@@ -24,8 +24,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _default_specimens_dir() -> Path:
+    """Return the default specimens directory (repo_root/specimens)."""
+    # Go up from ascribe_link/ to repo root, then into specimens/
+    module_dir = Path(__file__).parent
+    repo_root = module_dir.parent
+    return repo_root / "specimens"
+
+
 def create_app(
-    specimens_dir: str | Path = "./specimens",
+    specimens_dir: str | Path | None = None,
     mesh_functions: dict[str, Callable] | None = None,
     relay_mode: bool = False,
     enable_agent: bool = False,
@@ -38,6 +46,7 @@ def create_app(
     ----------
     specimens_dir:
         Path to the directory containing curated specimen bundles.
+        If None, defaults to <repo_root>/specimens (relative to this module).
     mesh_functions:
         Optional dict of {name: callable} processing functions to register.
     relay_mode:
@@ -52,6 +61,8 @@ def create_app(
         Timeout in seconds for agent-based generation.
     """
     # --- Specimen store ---
+    if specimens_dir is None:
+        specimens_dir = _default_specimens_dir()
     store = SpecimenStore(Path(specimens_dir))
 
     # --- Function registry ---

@@ -3,17 +3,24 @@
 from __future__ import annotations
 
 import base64
+import json
+import logging
 import mimetypes
 from pathlib import Path
+from typing import Any
 
-from litestar import Controller, Response, get
+from litestar import Controller, Response, get, post
 from litestar.di import Provide
 from litestar.exceptions import NotFoundException
 from litestar.response import File
 
+from ascribe_link.cache import RoomResultCache
 from ascribe_link.federation import FederationHub
-from ascribe_link.models import SpecimenListItem, SpecimenMetadata, SpecimenType
+from ascribe_link.models import SpecimenListItem, SpecimenMetadata, SpecimenType, result_to_dict
+from ascribe_link.processing import FunctionRegistry
 from ascribe_link.specimen_store import SpecimenStore
+
+logger = logging.getLogger(__name__)
 
 
 class SpecimenController(Controller):
@@ -135,14 +142,20 @@ class SpecimenController(Controller):
         content_type = mimetypes.guess_type(path.name)[0] or "image/png"
         return File(path=path, content_disposition_type="inline", media_type=content_type)
 
-    @get("/{specimen_id:str}/data")
-    async def get_data(
+    async def _get_data_impl(
         self,
         specimen_store: SpecimenStore,
         specimen_id: str,
+        function_registry: FunctionRegistry,
+        result_cache: RoomResultCache,
         federation_hub: FederationHub | None = None,
-    ) -> Response | File:
-        """Serve the specimen data file (mesh, volume, etc.)."""
+        params: dict[str, Any] | None = None,
+        room_id: str = "ascribe",
+    ) -> Response | File | dict[str, Any]:
+        """Internal implementation for fetching specimen data."""
+        if params is None:
+            params = {}
+
         # Check if this is a federated specimen
         if ":" in specimen_id and federation_hub:
             worker_id, actual_id = specimen_id.split(":", 1)
@@ -156,11 +169,11 @@ class SpecimenController(Controller):
                     raise NotFoundException(detail=response["error"])
 
                 # Response contains base64-encoded data, content_type, and filename
-                data = base64.b64decode(response.get("data", ""))
+                data_bytes = base64.b64decode(response.get("data", ""))
                 content_type = response.get("content_type", "application/octet-stream")
                 filename = response.get("filename", "data")
                 return Response(
-                    content=data,
+                    content=data_bytes,
                     media_type=content_type,
                     headers={
                         "Content-Disposition": f'attachment; filename="{filename}"',
@@ -175,6 +188,53 @@ class SpecimenController(Controller):
         meta = specimen_store.get(specimen_id)
         if meta is None:
             raise NotFoundException(detail=f"Specimen not found: {specimen_id}")
+
+        # Dynamic specimen: invoke the function
+        if meta.function_name:
+            # Extract defaults from schema if params not provided
+            if not params and meta.schema:
+                params = _extract_schema_defaults(meta.schema)
+            
+            logger.info(
+                "Dynamic specimen %s: invoking %s with params=%s",
+                specimen_id,
+                meta.function_name,
+                params,
+            )
+
+            # Check cache first
+            cached_result = result_cache.get(room_id, meta.function_name, params)
+            if cached_result is not None:
+                logger.info("Cache hit for %s/%s", room_id, meta.function_name)
+                return cached_result
+
+            # Invoke the function
+            try:
+                result = await function_registry.invoke_async(
+                    meta.function_name,
+                    [],
+                    params,
+                )
+                result_dict = result_to_dict(result)
+            except KeyError:
+                raise NotFoundException(detail=f"Function not found: {meta.function_name}")
+            except TypeError as e:
+                # Sync function - fall back to sync invoke
+                if "async" in str(e).lower() or "await" in str(e).lower():
+                    result = function_registry.invoke(
+                        meta.function_name,
+                        [],
+                        params,
+                    )
+                    result_dict = result_to_dict(result)
+                else:
+                    raise
+
+            # Cache and return
+            result_cache.put(room_id, meta.function_name, params, result_dict)
+            return result_dict
+
+        # Static specimen: return the file
         path = specimen_store.data_path(specimen_id)
         if path is None:
             raise NotFoundException(detail=f"Data file not found for: {specimen_id}")
@@ -186,8 +246,68 @@ class SpecimenController(Controller):
             media_type=content_type,
         )
 
+    @get("/{specimen_id:str}/data")
+    async def get_data_get(
+        self,
+        specimen_store: SpecimenStore,
+        specimen_id: str,
+        function_registry: FunctionRegistry,
+        result_cache: RoomResultCache,
+        federation_hub: FederationHub | None = None,
+    ) -> Response | File | dict[str, Any]:
+        """GET handler for specimen data (uses default parameters for dynamic specimens)."""
+        return await self._get_data_impl(
+            specimen_store=specimen_store,
+            specimen_id=specimen_id,
+            function_registry=function_registry,
+            result_cache=result_cache,
+            federation_hub=federation_hub,
+        )
+
+    @post("/{specimen_id:str}/data")
+    async def get_data_post(
+        self,
+        specimen_store: SpecimenStore,
+        specimen_id: str,
+        function_registry: FunctionRegistry,
+        result_cache: RoomResultCache,
+        federation_hub: FederationHub | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> Response | File | dict[str, Any]:
+        """POST handler for specimen data (allows custom parameters for dynamic specimens).
+
+        Request body (optional):
+        ```json
+        {
+            "params": {"radius": 2.0, "resolution": 64},
+            "room_id": "ascribe"
+        }
+        ```
+        """
+        if data is None:
+            data = {}
+        return await self._get_data_impl(
+            specimen_store=specimen_store,
+            specimen_id=specimen_id,
+            function_registry=function_registry,
+            result_cache=result_cache,
+            federation_hub=federation_hub,
+            params=data.get("params", {}),
+            room_id=data.get("room_id", "ascribe"),
+        )
+
     @get("/reload")
     async def reload_specimens(self, specimen_store: SpecimenStore) -> dict[str, int]:
         """Re-scan the specimens directory."""
         specimen_store.reload()
         return {"count": len(specimen_store.list())}
+
+
+def _extract_schema_defaults(schema: dict[str, Any]) -> dict[str, Any]:
+    """Extract default values from a JSON Schema."""
+    defaults = {}
+    properties = schema.get("properties", {})
+    for key, prop in properties.items():
+        if "default" in prop:
+            defaults[key] = prop["default"]
+    return defaults
