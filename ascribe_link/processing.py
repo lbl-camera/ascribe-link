@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from dataclasses import dataclass, field
 from itertools import chain
 from typing import Annotated, Any, Callable, Literal, get_args, get_origin, get_type_hints
 
@@ -27,9 +28,24 @@ from ascribe_link.models import (
     MeshResult,
     PointCloudResult,
     ProcessingResult,
+    SpecimenMetadata,
+    SpecimenType,
     VolumeResult,
     result_to_dict,
 )
+
+
+@dataclass
+class RegisteredSpecimen:
+    """Metadata for a specimen registered via code."""
+
+    function_name: str
+    display_name: str
+    description: str = ""
+    specimen_type: SpecimenType = SpecimenType.MESH
+    tags: list[str] = field(default_factory=list)
+    thumbnail: str | None = None  # Base64 data URI or None
+    story_text: list[str] = field(default_factory=list)
 
 
 class FunctionRegistry:
@@ -38,8 +54,21 @@ class FunctionRegistry:
     def __init__(self) -> None:
         self._functions: dict[str, Callable] = {}
         self._return_types: dict[str, str | None] = {}
+        self._specimens: dict[str, RegisteredSpecimen] = {}  # function_name -> specimen metadata
 
-    def register(self, name: str | None = None, return_type: str | None = None) -> Callable:
+    def register(
+        self,
+        name: str | None = None,
+        return_type: str | None = None,
+        *,
+        # Specimen metadata (if provided, registers as a specimen)
+        display_name: str | None = None,
+        description: str | None = None,
+        specimen_type: str | SpecimenType | None = None,
+        tags: list[str] | None = None,
+        thumbnail: str | None = None,
+        story_text: list[str] | None = None,
+    ) -> Callable:
         """Decorator to register a processing function.
 
         Parameters
@@ -48,12 +77,49 @@ class FunctionRegistry:
             Function name (defaults to function.__name__)
         return_type : str, optional
             Hint for return type: "mesh", "volume", "point_cloud", "image"
+        display_name : str, optional
+            Human-readable name for specimen catalog. If provided, registers
+            the function as a specimen.
+        description : str, optional
+            Description for specimen catalog.
+        specimen_type : str or SpecimenType, optional
+            Type of specimen: "mesh" or "volume". Defaults to return_type or "mesh".
+        tags : list[str], optional
+            Tags for categorization.
+        thumbnail : str, optional
+            Base64 data URI for thumbnail (e.g., "data:image/png;base64,...").
+        story_text : list[str], optional
+            Story/narration text for the specimen.
         """
 
         def wrapper(func: Callable) -> Callable:
             key = name or func.__name__
             self._functions[key] = func
             self._return_types[key] = return_type
+
+            # Register as specimen if display_name is provided
+            if display_name is not None:
+                # Determine specimen type
+                if specimen_type is not None:
+                    if isinstance(specimen_type, str):
+                        st = SpecimenType(specimen_type)
+                    else:
+                        st = specimen_type
+                elif return_type in ("mesh", "volume"):
+                    st = SpecimenType(return_type)
+                else:
+                    st = SpecimenType.MESH
+
+                self._specimens[key] = RegisteredSpecimen(
+                    function_name=key,
+                    display_name=display_name,
+                    description=description or func.__doc__ or "",
+                    specimen_type=st,
+                    tags=tags or [],
+                    thumbnail=thumbnail,
+                    story_text=story_text or [],
+                )
+
             return func
 
         return wrapper
@@ -68,6 +134,93 @@ class FunctionRegistry:
         key = name or func.__name__
         self._functions[key] = func
         self._return_types[key] = return_type
+
+    def register_specimen(
+        self,
+        func: Callable,
+        display_name: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        return_type: str | None = None,
+        specimen_type: str | SpecimenType | None = None,
+        tags: list[str] | None = None,
+        thumbnail: str | None = None,
+        story_text: list[str] | None = None,
+    ) -> None:
+        """Imperatively register a function as a specimen.
+
+        This is the non-decorator version for registering specimens.
+        """
+        key = name or func.__name__
+        self._functions[key] = func
+        self._return_types[key] = return_type
+
+        # Determine specimen type
+        if specimen_type is not None:
+            if isinstance(specimen_type, str):
+                st = SpecimenType(specimen_type)
+            else:
+                st = specimen_type
+        elif return_type in ("mesh", "volume"):
+            st = SpecimenType(return_type)
+        else:
+            st = SpecimenType.MESH
+
+        self._specimens[key] = RegisteredSpecimen(
+            function_name=key,
+            display_name=display_name,
+            description=description or func.__doc__ or "",
+            specimen_type=st,
+            tags=tags or [],
+            thumbnail=thumbnail,
+            story_text=story_text or [],
+        )
+
+    def list_specimens(self) -> list[SpecimenMetadata]:
+        """List all registered specimens as SpecimenMetadata objects."""
+        result = []
+        for func_name, spec in self._specimens.items():
+            result.append(
+                SpecimenMetadata(
+                    id=func_name,  # Use function name as specimen ID
+                    display_name=spec.display_name,
+                    description=spec.description,
+                    type=spec.specimen_type,
+                    data_file="",  # Dynamic specimens don't have data files
+                    thumbnail_file="",  # We use thumbnail data URI instead
+                    story_text=spec.story_text,
+                    tags=spec.tags,
+                    schema=self.get_schema(func_name),
+                    function_name=func_name,
+                )
+            )
+        return result
+
+    def get_specimen(self, function_name: str) -> SpecimenMetadata | None:
+        """Get specimen metadata for a registered function."""
+        spec = self._specimens.get(function_name)
+        if spec is None:
+            return None
+        return SpecimenMetadata(
+            id=function_name,
+            display_name=spec.display_name,
+            description=spec.description,
+            type=spec.specimen_type,
+            data_file="",
+            thumbnail_file="",
+            story_text=spec.story_text,
+            tags=spec.tags,
+            schema=self.get_schema(function_name),
+            function_name=function_name,
+        )
+
+    def get_specimen_thumbnail(self, function_name: str) -> str | None:
+        """Get the thumbnail data URI for a registered specimen."""
+        spec = self._specimens.get(function_name)
+        if spec is None:
+            return None
+        return spec.thumbnail
 
     def list_functions(self) -> list[FunctionInfo]:
         return [

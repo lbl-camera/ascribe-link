@@ -1,9 +1,0 @@
-{
-    "id": "parametric_sphere",
-    "display_name": "Parametric Sphere",
-    "description": "Sphere with adjustable radius and resolution",
-    "type": "mesh",
-    "thumbnail_file": "thumbnail.png",
-    "function_name": "generate_sphere",
-    "tags": ["parametric", "mesh", "dynamic"]
-}

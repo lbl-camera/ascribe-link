@@ -73,8 +73,24 @@ def create_app(
     from ascribe_link.parametric import generate_sphere, generate_torus
 
     registry.register_function(sphere_example, "sphere")
-    registry.register_function(generate_sphere, "generate_sphere", return_type="mesh")
-    registry.register_function(generate_torus, "generate_torus", return_type="mesh")
+
+    # Register parametric specimens (fully defined in code)
+    registry.register_specimen(
+        generate_sphere,
+        display_name="Parametric Sphere",
+        name="generate_sphere",
+        description="Sphere with adjustable radius and resolution",
+        return_type="mesh",
+        tags=["parametric", "mesh", "dynamic"],
+    )
+    registry.register_specimen(
+        generate_torus,
+        display_name="Parametric Torus",
+        name="generate_torus",
+        description="Torus with adjustable radii and segments",
+        return_type="mesh",
+        tags=["parametric", "mesh", "dynamic"],
+    )
 
     # Register user-provided functions
     if mesh_functions:

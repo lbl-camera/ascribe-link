@@ -30,16 +30,39 @@ class SpecimenController(Controller):
     async def list_specimens(
         self,
         specimen_store: SpecimenStore,
+        function_registry: FunctionRegistry,
         federation_hub: FederationHub | None = None,
     ) -> list[SpecimenListItem]:
         """List all curated specimens with names and thumbnail URLs.
 
-        In relay mode, also includes specimens from connected workers.
+        Includes:
+        - Filesystem specimens (from specimen_store)
+        - Code-registered specimens (from function_registry)
+        - Federated specimens from connected workers (in relay mode)
         """
         items = []
+        seen_ids: set[str] = set()
 
-        # Local specimens
+        # Code-registered specimens (from FunctionRegistry) take priority
+        for meta in function_registry.list_specimens():
+            seen_ids.add(meta.id)
+            items.append(
+                SpecimenListItem(
+                    id=meta.id,
+                    display_name=meta.display_name,
+                    description=meta.description,
+                    type=meta.type,
+                    thumbnail_url=f"/api/specimens/{meta.id}/thumbnail",
+                    tags=meta.tags,
+                    is_dynamic=True,  # Always dynamic for registry specimens
+                )
+            )
+
+        # Filesystem specimens (skip if already registered in code)
         for meta in specimen_store.list():
+            if meta.id in seen_ids:
+                continue
+            seen_ids.add(meta.id)
             items.append(
                 SpecimenListItem(
                     id=meta.id,
@@ -98,16 +121,20 @@ class SpecimenController(Controller):
                         )
             raise NotFoundException(detail=f"Federated specimen not found: {specimen_id}")
 
-        # Local specimen
+        # Check code-registered specimens first
+        registry_meta = function_registry.get_specimen(specimen_id)
+        if registry_meta is not None:
+            return registry_meta
+
+        # Filesystem specimen
         meta = specimen_store.get(specimen_id)
         if meta is None:
             raise NotFoundException(detail=f"Specimen not found: {specimen_id}")
 
-        # For dynamic specimens, generate schema from function signature
+        # For filesystem dynamic specimens, generate schema from function signature
         if meta.function_name:
             dynamic_schema = function_registry.get_schema(meta.function_name)
             if dynamic_schema:
-                # Return a new instance with the dynamically generated schema
                 return SpecimenMetadata(
                     id=meta.id,
                     display_name=meta.display_name,
@@ -128,6 +155,7 @@ class SpecimenController(Controller):
         self,
         specimen_store: SpecimenStore,
         specimen_id: str,
+        function_registry: FunctionRegistry,
         federation_hub: FederationHub | None = None,
     ) -> Response | File:
         """Serve the thumbnail image for a specimen."""
@@ -155,7 +183,20 @@ class SpecimenController(Controller):
             except KeyError:
                 raise NotFoundException(detail=f"Worker not found: {worker_id}")
 
-        # Local specimen
+        # Check code-registered specimens first (thumbnail as data URI)
+        thumbnail_data = function_registry.get_specimen_thumbnail(specimen_id)
+        if thumbnail_data is not None:
+            # Parse data URI: "data:image/png;base64,..."
+            if thumbnail_data.startswith("data:"):
+                # Extract content type and base64 data
+                header, encoded = thumbnail_data.split(",", 1)
+                content_type = header.split(":")[1].split(";")[0]
+                data = base64.b64decode(encoded)
+                return Response(content=data, media_type=content_type)
+            else:
+                raise NotFoundException(detail=f"Invalid thumbnail format for: {specimen_id}")
+
+        # Filesystem specimen
         path = specimen_store.thumbnail_path(specimen_id)
         if path is None:
             raise NotFoundException(detail=f"Thumbnail not found for: {specimen_id}")
@@ -204,8 +245,13 @@ class SpecimenController(Controller):
             except KeyError:
                 raise NotFoundException(detail=f"Worker not found: {worker_id}")
 
-        # Local specimen
-        meta = specimen_store.get(specimen_id)
+        # Check code-registered specimens first
+        meta = function_registry.get_specimen(specimen_id)
+        
+        # Fall back to filesystem specimen
+        if meta is None:
+            meta = specimen_store.get(specimen_id)
+        
         if meta is None:
             raise NotFoundException(detail=f"Specimen not found: {specimen_id}")
 
