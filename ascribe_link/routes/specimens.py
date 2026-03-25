@@ -48,7 +48,7 @@ class SpecimenController(Controller):
                     type=meta.type,
                     thumbnail_url=f"/api/specimens/{meta.id}/thumbnail",
                     tags=meta.tags,
-                    is_dynamic=meta.schema is not None,
+                    is_dynamic=meta.function_name is not None,
                 )
             )
 
@@ -75,6 +75,7 @@ class SpecimenController(Controller):
         self,
         specimen_store: SpecimenStore,
         specimen_id: str,
+        function_registry: FunctionRegistry,
         federation_hub: FederationHub | None = None,
     ) -> SpecimenMetadata:
         """Get full metadata for a specimen."""
@@ -101,6 +102,25 @@ class SpecimenController(Controller):
         meta = specimen_store.get(specimen_id)
         if meta is None:
             raise NotFoundException(detail=f"Specimen not found: {specimen_id}")
+
+        # For dynamic specimens, generate schema from function signature
+        if meta.function_name:
+            dynamic_schema = function_registry.get_schema(meta.function_name)
+            if dynamic_schema:
+                # Return a new instance with the dynamically generated schema
+                return SpecimenMetadata(
+                    id=meta.id,
+                    display_name=meta.display_name,
+                    description=meta.description,
+                    type=meta.type,
+                    data_file=meta.data_file,
+                    thumbnail_file=meta.thumbnail_file,
+                    story_text=meta.story_text,
+                    tags=meta.tags,
+                    schema=dynamic_schema,
+                    function_name=meta.function_name,
+                )
+
         return meta
 
     @get("/{specimen_id:str}/thumbnail")

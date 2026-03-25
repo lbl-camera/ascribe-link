@@ -5,24 +5,5 @@
     "type": "mesh",
     "thumbnail_file": "thumbnail.png",
     "function_name": "generate_sphere",
-    "tags": ["parametric", "mesh", "dynamic"],
-    "schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "generate_sphere",
-        "type": "object",
-        "properties": {
-            "radius": {
-                "type": "number",
-                "default": 1.0,
-                "minimum": 0.5,
-                "maximum": 5.0
-            },
-            "resolution": {
-                "type": "number",
-                "default": 32,
-                "minimum": 8,
-                "maximum": 128
-            }
-        }
-    }
+    "tags": ["parametric", "mesh", "dynamic"]
 }
