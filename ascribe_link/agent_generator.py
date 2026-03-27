@@ -459,8 +459,12 @@ async def generate_with_agent(
             "mcp__mesh__submit_mesh",
             "mcp__mesh__submit_volume",
         ],
+        disallowed_tools=[
+            "mcp__*__list_tools",  # Don't introspect MCP tools
+            "mcp__*__get_schema",  # Schema is in the prompt
+        ],
         permission_mode="acceptEdits",
-        max_turns=50,  # Reasonable limit for generation
+        max_turns=25,  # Encourage efficiency
         hooks=hooks if hooks else None,
     )
 
