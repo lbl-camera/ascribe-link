@@ -22,12 +22,8 @@ from ascribe_link.specimen_store import SpecimenStore
 
 logger = logging.getLogger(__name__)
 
-# Placeholder SVG for code-registered specimens without thumbnails
-_PLACEHOLDER_THUMBNAIL_SVG = b"""<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
-  <rect width="128" height="128" fill="#2a2a3e"/>
-  <circle cx="64" cy="64" r="40" fill="none" stroke="#6366f1" stroke-width="3"/>
-  <circle cx="64" cy="64" r="20" fill="#6366f1" opacity="0.3"/>
-</svg>"""
+# Placeholder thumbnail for specimens without thumbnails (Ascribe logo)
+_PLACEHOLDER_THUMBNAIL_PATH = Path(__file__).parent.parent / "assets" / "placeholder.ico"
 
 
 class SpecimenController(Controller):
@@ -205,9 +201,10 @@ class SpecimenController(Controller):
 
         # Code-registered specimen without thumbnail — return placeholder
         if function_registry.get_specimen(specimen_id) is not None:
-            return Response(
-                content=_PLACEHOLDER_THUMBNAIL_SVG,
-                media_type="image/svg+xml",
+            return File(
+                path=_PLACEHOLDER_THUMBNAIL_PATH,
+                content_disposition_type="inline",
+                media_type="image/x-icon",
             )
 
         # Filesystem specimen
@@ -215,9 +212,10 @@ class SpecimenController(Controller):
         if path is None:
             # Return placeholder if specimen exists but thumbnail is missing
             if specimen_store.get(specimen_id) is not None:
-                return Response(
-                    content=_PLACEHOLDER_THUMBNAIL_SVG,
-                    media_type="image/svg+xml",
+                return File(
+                    path=_PLACEHOLDER_THUMBNAIL_PATH,
+                    content_disposition_type="inline",
+                    media_type="image/x-icon",
                 )
             raise NotFoundException(detail=f"Thumbnail not found for: {specimen_id}")
         content_type = mimetypes.guess_type(path.name)[0] or "image/png"
