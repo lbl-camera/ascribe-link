@@ -49,16 +49,19 @@ Generate 3D meshes for Ascribe-XR. Tools are ready — do not fetch schemas, jus
 
 ## Quick Pattern
 
+Run this script (modify the mesh line), then call submit_mesh with the printed vertices and indices:
+
 ```python
 import pyvista as pv
+import json
 from ascribe_link.mesh_utils import extract_mesh_data
 
 mesh = pv.Box(bounds=(-0.5, 0.5, -0.5, 0.5, -0.5, 0.5))  # <-- modify for request
 vertices, indices = extract_mesh_data(mesh)
-print(f"{len(vertices)} vertices, {len(indices)//3} triangles")
+print(json.dumps({"vertices": vertices, "indices": indices}))
 ```
 
-Then call `submit_mesh(vertices=vertices, indices=indices)`.
+The output is valid JSON — use it directly in your submit_mesh call.
 
 ## PyVista Primitives
 
