@@ -23,7 +23,8 @@ from ascribe_link.specimen_store import SpecimenStore
 logger = logging.getLogger(__name__)
 
 # Placeholder thumbnail for specimens without thumbnails (Ascribe logo)
-_PLACEHOLDER_THUMBNAIL_PATH = Path(__file__).parent.parent / "assets" / "placeholder.ico"
+# Placeholder thumbnail for specimens without thumbnails (Ascribe-Link logo)
+_PLACEHOLDER_THUMBNAIL_PATH = Path(__file__).parent.parent / "assets" / "placeholder.png"
 
 
 class SpecimenController(Controller):
@@ -204,7 +205,7 @@ class SpecimenController(Controller):
             return File(
                 path=_PLACEHOLDER_THUMBNAIL_PATH,
                 content_disposition_type="inline",
-                media_type="image/x-icon",
+                media_type="image/png",
             )
 
         # Filesystem specimen
@@ -215,7 +216,7 @@ class SpecimenController(Controller):
                 return File(
                     path=_PLACEHOLDER_THUMBNAIL_PATH,
                     content_disposition_type="inline",
-                    media_type="image/x-icon",
+                    media_type="image/png",
                 )
             raise NotFoundException(detail=f"Thumbnail not found for: {specimen_id}")
         content_type = mimetypes.guess_type(path.name)[0] or "image/png"
