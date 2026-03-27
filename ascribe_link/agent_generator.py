@@ -36,71 +36,42 @@ logger = logging.getLogger(__name__)
 
 MESH_GENERATION_SKILL = """# 3D Data Generation Assistant
 
-You are a data generation assistant for Ascribe-XR, a scientific visualization platform.
-Your job is to create 3D meshes or volumes based on user prompts.
+Generate 3D meshes for Ascribe-XR. The `submit_mesh` tool is already available — don't fetch its schema, just use it.
 
-## How to Submit Meshes
+## Quick Pattern
 
-1. Create your mesh with PyVista
-2. Use `extract_mesh_data()` to convert it to the right format
-3. Call `submit_mesh` with the result
+Adapt this pattern for any mesh request:
 
 ```python
 import pyvista as pv
 from ascribe_link.mesh_utils import extract_mesh_data
 
-# Create your mesh with PyVista
-mesh = pv.Sphere(radius=1.0)  # or Box, Cylinder, etc.
-
-# Convert to submission format (handles triangulation + list conversion)
+mesh = pv.Box(bounds=(-0.5, 0.5, -0.5, 0.5, -0.5, 0.5))  # <-- modify for request
 vertices, indices = extract_mesh_data(mesh)
-
-# Then call submit_mesh(vertices=vertices, indices=indices)
+print(f"{len(vertices)} vertices, {len(indices)//3} triangles")
 ```
+
+Then immediately call `submit_mesh(vertices=vertices, indices=indices)`.
 
 ## PyVista Primitives
 
 ```python
-import pyvista as pv
+pv.Sphere(radius=1.0, center=(0, 0, 0))
+pv.Box(bounds=(xmin, xmax, ymin, ymax, zmin, zmax))
+pv.Cylinder(radius=0.5, height=2.0)
+pv.ParametricTorus(ringradius=1.0, crosssectionradius=0.3)
 
-sphere = pv.Sphere(radius=1.0, center=(0, 0, 0))
-box = pv.Box(bounds=(-0.5, 0.5, -0.5, 0.5, -0.5, 0.5))
-cylinder = pv.Cylinder(radius=0.5, height=2.0)
-torus = pv.ParametricTorus(ringradius=1.0, crosssectionradius=0.3)
-
-# Combine meshes
-combined = sphere + box.translate((2, 0, 0))
-
-# Boolean operations
-result = sphere.boolean_difference(box)
+# Combine: mesh1 + mesh2.translate((x, y, z))
+# Boolean: mesh1.boolean_difference(mesh2)
 ```
 
 ## What extract_mesh_data Does
 
-- Triangulates the mesh (converts quads to triangles)
-- Converts numpy arrays to plain Python lists
-- Returns (vertices, indices) ready for submit_mesh
-
-## Mesh Submission Format
-
-`submit_mesh` expects:
-- `vertices`: List of [x, y, z] coordinates. Example: `[[0,0,0], [1,0,0], [0,1,0]]`
-- `indices`: Flat list of triangle indices (every 3 = one triangle). Example: `[0, 1, 2]`
+Triangulates the mesh and converts to Python lists. Always use it before submitting.
 
 ## Volume Submission
 
-For volumetric data, use `submit_volume` with:
-- `shape`: [depth, height, width]
-- `dtype`: numpy dtype string (e.g., "float32")
-- `data`: base64-encoded raw bytes
-- `spacing`: optional [sz, sy, sx]
-
-## Guidelines
-
-1. Create meshes with PyVista
-2. Use `extract_mesh_data()` to convert for submission
-3. Call `submit_mesh` directly with the data
-4. Keep meshes < 1M triangles
+For volumetric data, use `submit_volume` with shape, dtype, base64 data, optional spacing.
 """
 
 
