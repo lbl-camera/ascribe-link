@@ -38,32 +38,45 @@ MESH_GENERATION_SKILL = """# 3D Data Generation Assistant
 
 Generate 3D meshes for Ascribe-XR.
 
-IMPORTANT: Do NOT use mcp__mesh__list_tools or any tool-listing commands. The schemas are provided below. Just generate the mesh and call submit_mesh directly.
+IMPORTANT: Do NOT use ToolSearch or any tool-listing commands. The schemas are below.
 
-## submit_mesh Schema
+## Submission Tools
 
+**submit_mesh** — for small meshes (< 50K vertices), pass vertices/indices directly:
 ```json
-{
-  "vertices": [[x, y, z], ...],  // array of 3-number arrays
-  "indices": [i, j, k, ...]      // flat array of integers, every 3 = one triangle
-}
+{"vertices": [[x, y, z], ...], "indices": [i, j, k, ...]}
 ```
 
-## Quick Pattern
+**submit_mesh_file** — for large meshes, save to JSON file and pass the path:
+```json
+{"file_path": "mesh.json"}
+```
+The JSON file must have `vertices` and `indices` keys.
 
-Run with `python script.py` (not python3), then call submit_mesh with the printed JSON:
+## Quick Pattern (small meshes)
 
 ```python
 import pyvista as pv
 import json
 from ascribe_link.mesh_utils import extract_mesh_data
 
-mesh = pv.Box(bounds=(-0.5, 0.5, -0.5, 0.5, -0.5, 0.5))  # <-- modify for request
+mesh = pv.Box(bounds=(-0.5, 0.5, -0.5, 0.5, -0.5, 0.5))  # <-- modify
 vertices, indices = extract_mesh_data(mesh)
 print(json.dumps({"vertices": vertices, "indices": indices}))
 ```
+Then call `submit_mesh` with the printed data.
 
-Use the output directly in your submit_mesh call. Do not fetch tool schemas — they're documented above.
+## Large Mesh Pattern (marching cubes, complex geometry)
+
+```python
+import json
+# ... generate mesh ...
+vertices, indices = extract_mesh_data(mesh)
+with open("mesh.json", "w") as f:
+    json.dump({"vertices": vertices, "indices": indices}, f)
+print(f"Saved {len(vertices)} vertices to mesh.json")
+```
+Then call `submit_mesh_file(file_path="mesh.json")`.
 
 ## PyVista Primitives
 
@@ -72,9 +85,6 @@ pv.Sphere(radius=1.0, center=(0, 0, 0))
 pv.Box(bounds=(xmin, xmax, ymin, ymax, zmin, zmax))
 pv.Cylinder(radius=0.5, height=2.0)
 pv.ParametricTorus(ringradius=1.0, crosssectionradius=0.3)
-
-# Combine: mesh1 + mesh2.translate((x, y, z))
-# Boolean: mesh1.boolean_difference(mesh2)
 ```
 
 ## extract_mesh_data
@@ -284,6 +294,86 @@ async def generate_with_agent(
             ]
         }
 
+    # Define submit_mesh_file tool for large meshes
+    submit_mesh_file_schema = {
+        "type": "object",
+        "properties": {
+            "file_path": {
+                "type": "string",
+                "description": "Path to JSON file with 'vertices' and 'indices' keys",
+            },
+        },
+        "required": ["file_path"],
+    }
+
+    @tool(
+        "submit_mesh_file",
+        "Submit a mesh from a JSON file. Use this for large meshes. The file must have 'vertices' (array of [x,y,z]) and 'indices' (flat array of ints).",
+        submit_mesh_file_schema,
+    )
+    async def submit_mesh_file(args: dict) -> dict:
+        """Load mesh from JSON file and submit it."""
+        import json
+        import math
+
+        file_path = args.get("file_path", "")
+        if not file_path:
+            return {
+                "content": [{"type": "text", "text": "Error: file_path is required"}]
+            }
+
+        # Resolve relative to working directory
+        full_path = working_dir_path / file_path
+        if not full_path.exists():
+            return {
+                "content": [
+                    {"type": "text", "text": f"Error: file not found: {file_path}"}
+                ]
+            }
+
+        try:
+            with open(full_path, "r") as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            return {"content": [{"type": "text", "text": f"Error: invalid JSON: {e}"}]}
+
+        vertices = data.get("vertices", [])
+        indices = data.get("indices", [])
+
+        if not vertices:
+            return {
+                "content": [{"type": "text", "text": "Error: vertices list is empty"}]
+            }
+        if not indices:
+            return {
+                "content": [{"type": "text", "text": "Error: indices list is empty"}]
+            }
+
+        # Basic validation (skip full validation for large meshes for performance)
+        if len(indices) % 3 != 0:
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Error: indices length must be divisible by 3",
+                    }
+                ]
+            }
+
+        result.result_type = "mesh"
+        result.vertices = vertices
+        result.indices = indices
+        result.submitted = True
+
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"Mesh submitted from file: {len(vertices)} vertices, {len(indices) // 3} triangles",
+                }
+            ]
+        }
+
     # Define the submit_volume tool with explicit JSON Schema
     submit_volume_schema = {
         "type": "object",
@@ -380,7 +470,7 @@ async def generate_with_agent(
     mesh_server = create_sdk_mcp_server(
         name="mesh-tools",
         version="1.0.0",
-        tools=[submit_mesh, submit_volume],
+        tools=[submit_mesh, submit_mesh_file, submit_volume],
     )
 
     # Set up working directory
@@ -459,6 +549,7 @@ async def generate_with_agent(
             "Write",
             "Bash",
             "mcp__mesh__submit_mesh",
+            "mcp__mesh__submit_mesh_file",
             "mcp__mesh__submit_volume",
         ],
         disallowed_tools=[
