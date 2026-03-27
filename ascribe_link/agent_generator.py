@@ -5,7 +5,7 @@ optionally processing input data files.
 
 Code execution is sandboxed via Firejail when available, providing:
 - Filesystem isolation
-- Network isolation  
+- Network isolation
 - Resource limits (memory, CPU time)
 - Capability dropping and seccomp filtering
 """
@@ -37,132 +37,77 @@ logger = logging.getLogger(__name__)
 MESH_GENERATION_SKILL = """# 3D Data Generation Assistant
 
 You are a data generation assistant for Ascribe-XR, a scientific visualization platform.
-Your job is to create 3D data (meshes or volumes) based on user prompts.
+Your job is to create 3D meshes or volumes based on user prompts.
 
-## Your Task
+## Quick Start: Use the Helper Functions
 
-Generate 3D data and submit it using either `submit_mesh` or `submit_volume`.
+The `ascribe_link.mesh_utils` module provides ready-to-use functions that handle all the conversion details:
 
-### For Meshes (surfaces, objects):
-Use `submit_mesh` with:
-- vertices: list of [x, y, z] coordinate lists
-- indices: flat list of triangle vertex indices (every 3 = one face)
+```python
+from ascribe_link.mesh_utils import extract_mesh_data, create_cube, create_sphere, create_cylinder, create_torus
 
-### For Volumes (3D arrays, voxel data):
-Use `submit_volume` with:
-- shape: [depth, height, width] 
-- dtype: numpy dtype string (e.g., "float32", "uint8")
-- data: base64-encoded raw bytes
-- spacing: optional voxel spacing [sz, sy, sx]
+# Option 1: Use convenience functions (simplest)
+vertices, indices = create_cube(size=1.0)
+vertices, indices = create_sphere(radius=1.0, resolution=30)
+vertices, indices = create_cylinder(radius=0.5, height=2.0)
+vertices, indices = create_torus(ring_radius=1.0, cross_section_radius=0.3)
 
-## Tools Available
+# Option 2: Use extract_mesh_data with any PyVista mesh
+import pyvista as pv
+mesh = pv.Sphere() + pv.Box().translate((2, 0, 0))  # Combined mesh
+vertices, indices = extract_mesh_data(mesh)
+```
 
-You have access to standard tools (Read, Write, Bash) plus:
+After getting vertices and indices, call `submit_mesh(vertices=vertices, indices=indices)`.
 
-- **submit_mesh**: Submit a triangular mesh surface
-- **submit_volume**: Submit volumetric (voxel) data
+## Example: Complete Cube Generation
 
-## Environment
+```python
+from ascribe_link.mesh_utils import create_cube
 
-- Bash commands run in a sandboxed environment (isolated filesystem, no network)
-- All work happens in the current working directory
-- Input files are copied to the working directory
-- PyVista, NumPy, SciPy, and scikit-image are available
+vertices, indices = create_cube(size=1.0)
+print(f"Cube: {len(vertices)} vertices, {len(indices) // 3} triangles")
+# Now call submit_mesh(vertices=vertices, indices=indices)
+```
 
-## Recommended Libraries
-
-PyVista is installed and highly recommended for mesh generation:
+## Example: Custom Mesh with PyVista
 
 ```python
 import pyvista as pv
-import numpy as np
+from ascribe_link.mesh_utils import extract_mesh_data
 
-# Create primitives
-sphere = pv.Sphere(radius=1.0, center=(0, 0, 0))
-box = pv.Box(bounds=(-1, 1, -1, 1, -1, 1))
-cylinder = pv.Cylinder(radius=0.5, height=2.0)
-torus = pv.ParametricTorus(ringradius=1.0, crosssectionradius=0.3)
-
-# Combine meshes
-combined = sphere + box.translate((2, 0, 0))
-
-# Boolean operations
-result = sphere.boolean_difference(box)
-
-# Smoothing, decimation
-smoothed = mesh.smooth(n_iter=100)
-decimated = mesh.decimate(0.5)
-
-# Extract for submission
-vertices = mesh.points.tolist()
-faces = mesh.faces.reshape(-1, 4)[:, 1:].flatten().tolist()  # Remove face counts
+# Create any mesh you want
+mesh = pv.ParametricKlein()  # Or any PyVista operation
+vertices, indices = extract_mesh_data(mesh)
+# Now call submit_mesh(vertices=vertices, indices=indices)
 ```
 
-Other useful libraries:
-- NumPy for numerical operations
-- SciPy for algorithms (scipy.ndimage.label, etc.)
-- skimage.measure.marching_cubes for volumetric data
+## What extract_mesh_data Does
 
-## Working with Input Files
+- Triangulates the mesh (converts quads to triangles)
+- Converts numpy arrays to plain Python lists
+- Returns (vertices, indices) ready for submit_mesh
 
-If a file path is provided, read it first to understand the data:
-- `.npy` files: NumPy arrays (could be point clouds, volumes, etc.)
-- `.stl/.obj/.vtk`: Mesh files (load with pyvista)
-- `.csv`: Tabular data (load with numpy or pandas)
+## Mesh Submission Format
+
+`submit_mesh` expects:
+- `vertices`: List of [x, y, z] coordinates. Example: `[[0,0,0], [1,0,0], [0,1,0]]`
+- `indices`: Flat list of triangle indices (every 3 = one triangle). Example: `[0, 1, 2]`
+
+## Volume Submission
+
+For volumetric data, use `submit_volume` with:
+- `shape`: [depth, height, width]
+- `dtype`: numpy dtype string (e.g., "float32")
+- `data`: base64-encoded raw bytes
+- `spacing`: optional [sz, sy, sx]
 
 ## Guidelines
 
-1. Write Python code to generate the mesh
-2. Execute the code using Bash
-3. Extract vertices and indices
-4. Call submit_mesh with the result
-
-Keep meshes reasonable in size (< 1M triangles) unless specifically requested.
-Ensure all coordinates are finite (no NaN or inf values).
-
-## Example: Simple Sphere (Mesh)
-
-```python
-import pyvista as pv
-
-sphere = pv.Sphere(radius=1.0, theta_resolution=30, phi_resolution=30)
-vertices = sphere.points.tolist()
-faces = sphere.faces.reshape(-1, 4)[:, 1:].flatten().tolist()
-
-# Save for submission
-import json
-with open('/tmp/mesh_result.json', 'w') as f:
-    json.dump({'vertices': vertices, 'indices': faces}, f)
-print("Mesh saved to /tmp/mesh_result.json")
-```
-
-After running the code, read the JSON and call submit_mesh.
-
-## Example: Volume Data
-
-```python
-import numpy as np
-
-# Create a 3D sphere volume
-size = 64
-x, y, z = np.ogrid[-1:1:size*1j, -1:1:size*1j, -1:1:size*1j]
-volume = (x**2 + y**2 + z**2 < 0.5).astype(np.float32)
-
-# Save for submission
-import json
-import base64
-data = {
-    'type': 'volume',
-    'shape': list(volume.shape),
-    'dtype': str(volume.dtype),
-    'data': base64.b64encode(volume.tobytes()).decode('ascii'),
-    'spacing': [1.0, 1.0, 1.0]
-}
-with open('result.json', 'w') as f:
-    json.dump(data, f)
-```
-
-Then call submit_volume with the result, or read the JSON.
+1. **Use helper functions** from `ascribe_link.mesh_utils` when possible
+2. For custom meshes, use `extract_mesh_data(your_mesh)`
+3. Call `submit_mesh` directly with the returned data
+4. Keep meshes < 1M triangles
 """
 
 
@@ -170,9 +115,11 @@ Then call submit_volume with the result, or read the JSON.
 # Result holder for capturing mesh from tool call
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class AgentResult:
     """Holds the result from the agent (mesh or volume)."""
+
     result_type: str | None = None  # "mesh" or "volume"
     # Mesh data
     vertices: list[list[float]] | None = None
@@ -190,6 +137,7 @@ class AgentResult:
 # ---------------------------------------------------------------------------
 # Agent-based mesh generation
 # ---------------------------------------------------------------------------
+
 
 async def generate_with_agent(
     prompt: str,
@@ -225,7 +173,7 @@ async def generate_with_agent(
         Result dictionary with 'type' field indicating the data type:
         - "mesh": contains vertices, indices
         - "volume": contains shape, dtype, data (base64), spacing
-        
+
     Raises
     ------
     ValueError
@@ -247,20 +195,39 @@ async def generate_with_agent(
 
     result = AgentResult()
     sandbox_config = sandbox_config or SandboxConfig()
-    
+
     # Check sandbox availability
     use_sandbox = sandbox and is_firejail_available()
     if sandbox and not use_sandbox:
         logger.warning("Firejail not available, running without sandbox")
 
-    # Define the submit_mesh tool
+    # Define the submit_mesh tool with explicit JSON Schema
+    submit_mesh_schema = {
+        "type": "object",
+        "properties": {
+            "vertices": {
+                "type": "array",
+                "description": "List of [x, y, z] coordinates for each vertex",
+                "items": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "minItems": 3,
+                    "maxItems": 3,
+                },
+            },
+            "indices": {
+                "type": "array",
+                "description": "Flat list of vertex indices (every 3 = one triangle)",
+                "items": {"type": "integer"},
+            },
+        },
+        "required": ["vertices", "indices"],
+    }
+
     @tool(
         "submit_mesh",
-        "Submit a generated mesh. Call this when your mesh is ready.",
-        {
-            "vertices": list,  # list of [x, y, z] coordinates
-            "indices": list,   # flat list of triangle indices
-        }
+        "Submit a triangular mesh. vertices is an array of [x,y,z] points. indices is a flat array of integers (every 3 indices form one triangle face).",
+        submit_mesh_schema,
     )
     async def submit_mesh(args: dict) -> dict:
         """Capture the mesh submitted by the agent."""
@@ -269,26 +236,56 @@ async def generate_with_agent(
 
         # Validate
         if not vertices:
-            return {"content": [{"type": "text", "text": "Error: vertices list is empty"}]}
+            return {
+                "content": [{"type": "text", "text": "Error: vertices list is empty"}]
+            }
         if not indices:
-            return {"content": [{"type": "text", "text": "Error: indices list is empty"}]}
+            return {
+                "content": [{"type": "text", "text": "Error: indices list is empty"}]
+            }
 
         # Check vertex format
         if not all(isinstance(v, (list, tuple)) and len(v) == 3 for v in vertices):
-            return {"content": [{"type": "text", "text": "Error: each vertex must be [x, y, z]"}]}
+            return {
+                "content": [
+                    {"type": "text", "text": "Error: each vertex must be [x, y, z]"}
+                ]
+            }
 
         # Check for non-finite values
         import math
+
         for v in vertices:
             if not all(isinstance(c, (int, float)) and math.isfinite(c) for c in v):
-                return {"content": [{"type": "text", "text": "Error: vertices contain non-finite values"}]}
+                return {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Error: vertices contain non-finite values",
+                        }
+                    ]
+                }
 
         # Check indices
         if not all(isinstance(i, int) and 0 <= i < len(vertices) for i in indices):
-            return {"content": [{"type": "text", "text": f"Error: indices must be integers in range [0, {len(vertices)})"}]}
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Error: indices must be integers in range [0, {len(vertices)})",
+                    }
+                ]
+            }
 
         if len(indices) % 3 != 0:
-            return {"content": [{"type": "text", "text": "Error: indices length must be divisible by 3 (triangles)"}]}
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Error: indices length must be divisible by 3 (triangles)",
+                    }
+                ]
+            }
 
         result.result_type = "mesh"
         result.vertices = vertices
@@ -296,22 +293,48 @@ async def generate_with_agent(
         result.submitted = True
 
         return {
-            "content": [{
-                "type": "text",
-                "text": f"Mesh submitted successfully: {len(vertices)} vertices, {len(indices) // 3} triangles"
-            }]
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"Mesh submitted successfully: {len(vertices)} vertices, {len(indices) // 3} triangles",
+                }
+            ]
         }
 
-    # Define the submit_volume tool
+    # Define the submit_volume tool with explicit JSON Schema
+    submit_volume_schema = {
+        "type": "object",
+        "properties": {
+            "shape": {
+                "type": "array",
+                "description": "Volume dimensions [depth, height, width]",
+                "items": {"type": "integer"},
+                "minItems": 3,
+                "maxItems": 3,
+            },
+            "dtype": {
+                "type": "string",
+                "description": "NumPy dtype string, e.g. 'float32', 'uint8'",
+            },
+            "data": {
+                "type": "string",
+                "description": "Base64-encoded raw bytes of the volume data",
+            },
+            "spacing": {
+                "type": "array",
+                "description": "Optional voxel spacing [sz, sy, sx]",
+                "items": {"type": "number"},
+                "minItems": 3,
+                "maxItems": 3,
+            },
+        },
+        "required": ["shape", "dtype", "data"],
+    }
+
     @tool(
         "submit_volume",
-        "Submit generated volumetric data. Call this when your 3D volume is ready.",
-        {
-            "shape": list,    # [depth, height, width] or [z, y, x]
-            "dtype": str,     # numpy dtype string, e.g. "float32"
-            "data": str,      # base64-encoded raw bytes
-            "spacing": list,  # optional voxel spacing [sz, sy, sx]
-        }
+        "Submit volumetric (voxel) data. shape is [depth, height, width], dtype is a numpy dtype string, data is base64-encoded bytes.",
+        submit_volume_schema,
     )
     async def submit_volume(args: dict) -> dict:
         """Capture the volume submitted by the agent."""
@@ -322,18 +345,34 @@ async def generate_with_agent(
 
         # Validate
         if not shape or len(shape) != 3:
-            return {"content": [{"type": "text", "text": "Error: shape must be [depth, height, width]"}]}
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Error: shape must be [depth, height, width]",
+                    }
+                ]
+            }
         if not data:
             return {"content": [{"type": "text", "text": "Error: data is empty"}]}
 
         # Validate base64
         import base64
+
         try:
             decoded = base64.b64decode(data)
             import numpy as np
+
             expected_size = np.prod(shape) * np.dtype(dtype).itemsize
             if len(decoded) != expected_size:
-                return {"content": [{"type": "text", "text": f"Error: data size mismatch. Expected {expected_size} bytes, got {len(decoded)}"}]}
+                return {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"Error: data size mismatch. Expected {expected_size} bytes, got {len(decoded)}",
+                        }
+                    ]
+                }
         except Exception as e:
             return {"content": [{"type": "text", "text": f"Error decoding data: {e}"}]}
 
@@ -346,10 +385,12 @@ async def generate_with_agent(
 
         total_voxels = shape[0] * shape[1] * shape[2]
         return {
-            "content": [{
-                "type": "text",
-                "text": f"Volume submitted successfully: {shape} ({total_voxels:,} voxels, {dtype})"
-            }]
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"Volume submitted successfully: {shape} ({total_voxels:,} voxels, {dtype})",
+                }
+            ]
         }
 
     # Create MCP server with our tools
@@ -362,7 +403,7 @@ async def generate_with_agent(
     # Set up working directory
     if working_dir is None:
         working_dir = tempfile.mkdtemp(prefix="ascribe_agent_")
-    
+
     working_dir_path = Path(working_dir)
 
     # Build the user prompt
@@ -378,18 +419,20 @@ async def generate_with_agent(
             user_prompt = f"Input file (not found): {file_path}\n\n{prompt}"
 
     # Create a hook that wraps Bash commands in Firejail
-    async def sandbox_bash_hook(input_data: dict, tool_use_id: str, context: dict) -> dict:
+    async def sandbox_bash_hook(
+        input_data: dict, tool_use_id: str, context: dict
+    ) -> dict:
         """Intercept Bash commands and wrap them in Firejail."""
         tool_name = input_data.get("tool_name", "")
         tool_input = input_data.get("tool_input", {})
-        
+
         if tool_name != "Bash" or not use_sandbox:
             return {}  # Allow through unchanged
-        
+
         command = tool_input.get("command", "")
         if not command:
             return {}
-        
+
         # Build Firejail-wrapped command
         # The command runs in the working directory which Firejail will isolate
         firejail_cmd = build_firejail_command(
@@ -397,12 +440,14 @@ async def generate_with_agent(
             working_dir=working_dir_path,
             config=sandbox_config,
         )
-        
+
         # Replace the command with the sandboxed version
-        sandboxed_command = " ".join(f'"{arg}"' if " " in arg else arg for arg in firejail_cmd)
-        
+        sandboxed_command = " ".join(
+            f'"{arg}"' if " " in arg else arg for arg in firejail_cmd
+        )
+
         logger.debug("Sandboxing Bash command: %s -> firejail ...", command[:50])
-        
+
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
@@ -428,7 +473,7 @@ async def generate_with_agent(
         mcp_servers={"mesh": mesh_server},
         allowed_tools=[
             "Read",
-            "Write", 
+            "Write",
             "Bash",
             "mcp__mesh__submit_mesh",
             "mcp__mesh__submit_volume",
@@ -453,20 +498,26 @@ async def generate_with_agent(
                     msg_count += 1
                     msg_type = type(msg).__name__
                     logger.info("Received message #%d: %s", msg_count, msg_type)
-                    
+
                     if isinstance(msg, AssistantMessage):
                         for block in msg.content:
                             if isinstance(block, TextBlock):
                                 logger.info("Agent text: %s", block.text[:500])
                     elif isinstance(msg, ResultMessage):
-                        logger.info("Result message received: %s", getattr(msg, 'result', 'no result attr'))
+                        logger.info(
+                            "Result message received: %s",
+                            getattr(msg, "result", "no result attr"),
+                        )
 
                     # Check if we got a result
                     if result.submitted:
                         logger.info("Result submitted, exiting response loop")
                         return
-                
-                logger.warning("Response loop ended without submission (processed %d messages)", msg_count)
+
+                logger.warning(
+                    "Response loop ended without submission (processed %d messages)",
+                    msg_count,
+                )
 
             try:
                 await asyncio.wait_for(process_responses(), timeout=timeout)
@@ -478,7 +529,9 @@ async def generate_with_agent(
         raise
 
     if not result.submitted:
-        raise ValueError("Agent did not submit any data. It may have encountered an error.")
+        raise ValueError(
+            "Agent did not submit any data. It may have encountered an error."
+        )
 
     # Build result dictionary based on type
     if result.result_type == "mesh":
@@ -515,6 +568,7 @@ async def generate_with_agent(
 # Wrapper for FunctionRegistry integration
 # ---------------------------------------------------------------------------
 
+
 def create_agent_function(
     model: str = "claude-sonnet-4-20250514",
     timeout: float = 300.0,
@@ -539,6 +593,7 @@ def create_agent_function(
     callable
         Async function compatible with FunctionRegistry.
     """
+
     async def agent_generate(
         prompt: str = "Create a sphere",
         file_path: str | None = None,
