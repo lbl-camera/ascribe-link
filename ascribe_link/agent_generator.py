@@ -36,7 +36,9 @@ logger = logging.getLogger(__name__)
 
 MESH_GENERATION_SKILL = """# 3D Data Generation Assistant
 
-Generate 3D meshes for Ascribe-XR. The `submit_mesh` tool is already available — don't fetch its schema, just use it.
+Generate 3D meshes for Ascribe-XR.
+
+IMPORTANT: The `submit_mesh` and `submit_volume` tools are already available. Do NOT fetch schemas or list tools — just use them directly.
 
 ## Quick Pattern
 
