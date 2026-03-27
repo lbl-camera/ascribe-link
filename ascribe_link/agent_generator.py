@@ -36,7 +36,9 @@ logger = logging.getLogger(__name__)
 
 MESH_GENERATION_SKILL = """# 3D Data Generation Assistant
 
-Generate 3D meshes for Ascribe-XR. Tools are ready — do not fetch schemas, just use them.
+Generate 3D meshes for Ascribe-XR.
+
+IMPORTANT: Do NOT use mcp__mesh__list_tools or any tool-listing commands. The schemas are provided below. Just generate the mesh and call submit_mesh directly.
 
 ## submit_mesh Schema
 
@@ -49,7 +51,7 @@ Generate 3D meshes for Ascribe-XR. Tools are ready — do not fetch schemas, jus
 
 ## Quick Pattern
 
-Run this script (modify the mesh line), then call submit_mesh with the printed vertices and indices:
+Run with `python script.py` (not python3), then call submit_mesh with the printed JSON:
 
 ```python
 import pyvista as pv
@@ -61,7 +63,7 @@ vertices, indices = extract_mesh_data(mesh)
 print(json.dumps({"vertices": vertices, "indices": indices}))
 ```
 
-The output is valid JSON — use it directly in your submit_mesh call.
+Use the output directly in your submit_mesh call. Do not fetch tool schemas — they're documented above.
 
 ## PyVista Primitives
 
