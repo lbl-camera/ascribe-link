@@ -213,6 +213,12 @@ class SpecimenController(Controller):
         # Filesystem specimen
         path = specimen_store.thumbnail_path(specimen_id)
         if path is None:
+            # Return placeholder if specimen exists but thumbnail is missing
+            if specimen_store.get(specimen_id) is not None:
+                return Response(
+                    content=_PLACEHOLDER_THUMBNAIL_SVG,
+                    media_type="image/svg+xml",
+                )
             raise NotFoundException(detail=f"Thumbnail not found for: {specimen_id}")
         content_type = mimetypes.guess_type(path.name)[0] or "image/png"
         return File(path=path, content_disposition_type="inline", media_type=content_type)
