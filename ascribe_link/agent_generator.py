@@ -62,22 +62,19 @@ import pyvista as pv
 from ascribe_link.mesh_utils import extract_mesh_data
 
 mesh = pv.Sphere(radius=1.0)
-mesh = mesh.compute_normals()  # Add normals
-vertices, indices = extract_mesh_data(mesh)
-normals = mesh.point_normals.tolist()
+vertices, indices, normals = extract_mesh_data(mesh)  # Includes normals
 ```
 
 ## Marching Cubes Example (isosurface from volume)
 
 ```python
 from skimage.measure import marching_cubes
-import numpy as np
 
 # volume is a 3D numpy array
-verts, faces, normals, values = marching_cubes(volume, level=threshold)
+verts, faces, norms, values = marching_cubes(volume, level=threshold)
 vertices = verts.tolist()
 indices = faces.flatten().tolist()
-normals = normals.tolist()
+normals = norms.flatten().tolist()  # MUST flatten to [nx, ny, nz, nx, ny, nz, ...]
 ```
 
 ## PyVista Primitives

@@ -13,8 +13,10 @@ if TYPE_CHECKING:
     import pyvista as pv
 
 
-def extract_mesh_data(mesh: "pv.PolyData") -> tuple[list[list[float]], list[int]]:
-    """Extract vertices and indices from a PyVista mesh for submit_mesh.
+def extract_mesh_data(
+    mesh: "pv.PolyData", include_normals: bool = True
+) -> tuple[list[list[float]], list[int], list[float] | None]:
+    """Extract vertices, indices, and normals from a PyVista mesh.
 
     Automatically triangulates the mesh if needed (converts quads to triangles)
     and converts numpy arrays to plain Python lists.
@@ -23,6 +25,8 @@ def extract_mesh_data(mesh: "pv.PolyData") -> tuple[list[list[float]], list[int]
     ----------
     mesh : pv.PolyData
         A PyVista mesh object (sphere, box, cylinder, or any PolyData).
+    include_normals : bool
+        If True, compute and return normals.
 
     Returns
     -------
@@ -30,6 +34,8 @@ def extract_mesh_data(mesh: "pv.PolyData") -> tuple[list[list[float]], list[int]
         List of [x, y, z] coordinates for each vertex.
     indices : list[int]
         Flat list of vertex indices (every 3 = one triangle).
+    normals : list[float] | None
+        Flat list of normal components [nx, ny, nz, nx, ny, nz, ...] or None.
 
     Example
     -------
@@ -37,11 +43,16 @@ def extract_mesh_data(mesh: "pv.PolyData") -> tuple[list[list[float]], list[int]
     >>> from ascribe_link.mesh_utils import extract_mesh_data
     >>>
     >>> sphere = pv.Sphere(radius=1.0)
-    >>> vertices, indices = extract_mesh_data(sphere)
-    >>> # Now call submit_mesh(vertices=vertices, indices=indices)
+    >>> vertices, indices, normals = extract_mesh_data(sphere)
     """
     # Triangulate to ensure all faces are triangles (not quads)
     triangulated = mesh.triangulate()
+
+    # Compute normals if requested
+    if include_normals:
+        triangulated = triangulated.compute_normals(
+            point_normals=True, cell_normals=False
+        )
 
     # Extract vertices as list of [x, y, z]
     vertices = triangulated.points.tolist()
@@ -56,4 +67,21 @@ def extract_mesh_data(mesh: "pv.PolyData") -> tuple[list[list[float]], list[int]
     else:
         indices = []
 
-    return vertices, indices
+    # Extract normals as flat list
+    normals = None
+    if include_normals and triangulated.point_normals is not None:
+        normals = triangulated.point_normals.flatten().tolist()
+
+    return vertices, indices, normals
+
+
+def flatten_normals(normals_nested: list[list[float]]) -> list[float]:
+    """Flatten nested normals [[nx, ny, nz], ...] to [nx, ny, nz, nx, ny, nz, ...].
+
+    Use this when you have normals from marching_cubes or other sources
+    that return per-vertex normal vectors as nested lists.
+    """
+    result = []
+    for n in normals_nested:
+        result.extend(n)
+    return result
