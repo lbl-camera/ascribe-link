@@ -442,22 +442,31 @@ async def generate_with_agent(
 
     try:
         async with ClaudeSDKClient(options=options) as client:
+            logger.info("ClaudeSDKClient connected, sending query...")
             await client.query(user_prompt)
+            logger.info("Query sent, waiting for responses...")
 
             # Process responses with timeout
             async def process_responses():
+                msg_count = 0
                 async for msg in client.receive_response():
+                    msg_count += 1
+                    msg_type = type(msg).__name__
+                    logger.info("Received message #%d: %s", msg_count, msg_type)
+                    
                     if isinstance(msg, AssistantMessage):
                         for block in msg.content:
                             if isinstance(block, TextBlock):
-                                logger.debug("Agent: %s", block.text[:200])
+                                logger.info("Agent text: %s", block.text[:500])
                     elif isinstance(msg, ResultMessage):
-                        # Check if this indicates completion
-                        pass
+                        logger.info("Result message received: %s", getattr(msg, 'result', 'no result attr'))
 
                     # Check if we got a result
                     if result.submitted:
+                        logger.info("Result submitted, exiting response loop")
                         return
+                
+                logger.warning("Response loop ended without submission (processed %d messages)", msg_count)
 
             try:
                 await asyncio.wait_for(process_responses(), timeout=timeout)
@@ -465,7 +474,7 @@ async def generate_with_agent(
                 raise TimeoutError(f"Agent timed out after {timeout}s")
 
     except Exception as e:
-        logger.error("Agent error: %s", e)
+        logger.error("Agent error: %s", e, exc_info=True)
         raise
 
     if not result.submitted:
