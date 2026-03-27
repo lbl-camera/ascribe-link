@@ -42,15 +42,19 @@ IMPORTANT: Do NOT use ToolSearch or any tool-listing commands.
 
 ## How to Submit
 
-Save mesh to JSON file with vertices, indices, and normals, then call `submit_mesh_file`:
+Save mesh to JSON file with FLATTENED vertices, indices, and normals:
 
 ```python
 import json
 
-# After generating mesh data (vertices, indices, normals):
+# vertices, indices, normals must all be FLAT lists:
+# vertices: [x, y, z, x, y, z, ...] not [[x,y,z], [x,y,z], ...]
+# normals:  [nx, ny, nz, nx, ny, nz, ...] not [[nx,ny,nz], ...]
+# indices:  [i, j, k, ...] (already flat)
+
 with open("mesh.json", "w") as f:
     json.dump({"vertices": vertices, "indices": indices, "normals": normals}, f)
-print(f"Saved {len(vertices)} vertices")
+print(f"Saved {len(vertices)//3} vertices")
 ```
 
 Then call: `submit_mesh_file(file_path="mesh.json")`
@@ -72,9 +76,9 @@ from skimage.measure import marching_cubes
 
 # volume is a 3D numpy array
 verts, faces, norms, values = marching_cubes(volume, level=threshold)
-vertices = verts.tolist()
+vertices = verts.flatten().tolist()  # MUST flatten to [x, y, z, x, y, z, ...]
 indices = faces.flatten().tolist()
-normals = norms.flatten().tolist()  # MUST flatten to [nx, ny, nz, nx, ny, nz, ...]
+normals = norms.flatten().tolist()   # MUST flatten to [nx, ny, nz, nx, ny, nz, ...]
 ```
 
 ## PyVista Primitives

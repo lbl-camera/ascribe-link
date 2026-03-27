@@ -30,8 +30,8 @@ def extract_mesh_data(
 
     Returns
     -------
-    vertices : list[list[float]]
-        List of [x, y, z] coordinates for each vertex.
+    vertices : list[float]
+        Flat list of vertex coordinates [x, y, z, x, y, z, ...].
     indices : list[int]
         Flat list of vertex indices (every 3 = one triangle).
     normals : list[float] | None
@@ -54,8 +54,8 @@ def extract_mesh_data(
             point_normals=True, cell_normals=False
         )
 
-    # Extract vertices as list of [x, y, z]
-    vertices = triangulated.points.tolist()
+    # Extract vertices as flat list [x, y, z, x, y, z, ...]
+    vertices = triangulated.points.flatten().tolist()
 
     # Extract face indices
     # PyVista faces format: [n, i0, i1, i2, n, i0, i1, i2, ...]
