@@ -110,7 +110,14 @@ def create_app(
                 timeout=agent_timeout,
                 sandbox=True,  # Always try to sandbox
             )
-            registry.register_function(agent_func, "ai_generate")
+            registry.register_specimen(
+                agent_func,
+                display_name="AI Generate",
+                name="ai_generate",
+                description="Generate 3D data from natural language prompts using an AI agent",
+                return_type="mesh",  # Can also produce volumes, but mesh is default
+                tags=["ai", "generative", "dynamic"],
+            )
             
             sandbox_status = "enabled" if is_firejail_available() else "disabled (firejail not found)"
             logger.info("AI agent generation enabled (model=%s, sandbox=%s)", agent_model, sandbox_status)
