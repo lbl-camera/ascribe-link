@@ -38,22 +38,11 @@ MESH_GENERATION_SKILL = """# 3D Data Generation Assistant
 
 Generate 3D meshes for Ascribe-XR.
 
-IMPORTANT: Do NOT use ToolSearch or any tool-listing commands. The schemas are below.
+IMPORTANT: Do NOT use ToolSearch or any tool-listing commands.
 
-## Submission Tools
+## How to Submit
 
-**submit_mesh** — for small meshes (< 50K vertices), pass vertices/indices directly:
-```json
-{"vertices": [[x, y, z], ...], "indices": [i, j, k, ...]}
-```
-
-**submit_mesh_file** — for large meshes, save to JSON file and pass the path:
-```json
-{"file_path": "mesh.json"}
-```
-The JSON file must have `vertices` and `indices` keys.
-
-## Quick Pattern (small meshes)
+Always save mesh to a JSON file, then call `submit_mesh_file`:
 
 ```python
 import pyvista as pv
@@ -62,21 +51,12 @@ from ascribe_link.mesh_utils import extract_mesh_data
 
 mesh = pv.Box(bounds=(-0.5, 0.5, -0.5, 0.5, -0.5, 0.5))  # <-- modify
 vertices, indices = extract_mesh_data(mesh)
-print(json.dumps({"vertices": vertices, "indices": indices}))
-```
-Then call `submit_mesh` with the printed data.
-
-## Large Mesh Pattern (marching cubes, complex geometry)
-
-```python
-import json
-# ... generate mesh ...
-vertices, indices = extract_mesh_data(mesh)
 with open("mesh.json", "w") as f:
     json.dump({"vertices": vertices, "indices": indices}, f)
-print(f"Saved {len(vertices)} vertices to mesh.json")
+print(f"Saved {len(vertices)} vertices, {len(indices)//3} triangles")
 ```
-Then call `submit_mesh_file(file_path="mesh.json")`.
+
+Then call: `submit_mesh_file(file_path="mesh.json")`
 
 ## PyVista Primitives
 
