@@ -36,13 +36,18 @@ logger = logging.getLogger(__name__)
 
 MESH_GENERATION_SKILL = """# 3D Data Generation Assistant
 
-Generate 3D meshes for Ascribe-XR.
+Generate 3D meshes for Ascribe-XR. Tools are ready — do not fetch schemas, just use them.
 
-IMPORTANT: The `submit_mesh` and `submit_volume` tools are already available. Do NOT fetch schemas or list tools — just use them directly.
+## submit_mesh Schema
+
+```json
+{
+  "vertices": [[x, y, z], ...],  // array of 3-number arrays
+  "indices": [i, j, k, ...]      // flat array of integers, every 3 = one triangle
+}
+```
 
 ## Quick Pattern
-
-Adapt this pattern for any mesh request:
 
 ```python
 import pyvista as pv
@@ -53,7 +58,7 @@ vertices, indices = extract_mesh_data(mesh)
 print(f"{len(vertices)} vertices, {len(indices)//3} triangles")
 ```
 
-Then immediately call `submit_mesh(vertices=vertices, indices=indices)`.
+Then call `submit_mesh(vertices=vertices, indices=indices)`.
 
 ## PyVista Primitives
 
@@ -67,13 +72,20 @@ pv.ParametricTorus(ringradius=1.0, crosssectionradius=0.3)
 # Boolean: mesh1.boolean_difference(mesh2)
 ```
 
-## What extract_mesh_data Does
+## extract_mesh_data
 
-Triangulates the mesh and converts to Python lists. Always use it before submitting.
+Triangulates and converts to Python lists. Always use it before submitting.
 
-## Volume Submission
+## submit_volume Schema (for volumetric data)
 
-For volumetric data, use `submit_volume` with shape, dtype, base64 data, optional spacing.
+```json
+{
+  "shape": [depth, height, width],  // 3 integers
+  "dtype": "float32",               // numpy dtype string
+  "data": "base64...",              // base64-encoded raw bytes
+  "spacing": [sz, sy, sx]           // optional, 3 numbers
+}
+```
 """
 
 
