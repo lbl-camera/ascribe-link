@@ -490,6 +490,17 @@ async def generate_with_agent(
                         for block in msg.content:
                             if isinstance(block, TextBlock):
                                 logger.info("Agent text: %s", block.text[:500])
+                            elif hasattr(block, "name"):
+                                # ToolUseBlock - log the tool being called
+                                tool_name = getattr(block, "name", "unknown")
+                                tool_input = getattr(block, "input", {})
+                                logger.info(
+                                    "Agent tool call: %s, input_keys=%s",
+                                    tool_name,
+                                    list(tool_input.keys())
+                                    if isinstance(tool_input, dict)
+                                    else "N/A",
+                                )
                     elif isinstance(msg, ResultMessage):
                         logger.info(
                             "Result message received: %s",
