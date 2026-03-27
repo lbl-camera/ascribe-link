@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 from litestar import Litestar
 from litestar.config.cors import CORSConfig
 from litestar.di import Provide
+from litestar.openapi import OpenAPIConfig
+from litestar.openapi.plugins import SwaggerRenderPlugin
 
 from ascribe_link.cache import RoomResultCache
 from ascribe_link.federation import FederationHub
@@ -161,6 +163,13 @@ def create_app(
         cors_config=CORSConfig(allow_origins=["*"]),
         exception_handlers={Exception: log_exception_handler},
         debug=True,
+        openapi_config=OpenAPIConfig(
+            title="ASCRIBE-Link",
+            description="Acribe-link API documentation",
+            version="0.0.1",
+            render_plugins=[SwaggerRenderPlugin()],
+            path="/docs",
+        ),
     )
 
     return app
