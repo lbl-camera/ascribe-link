@@ -531,7 +531,7 @@ def create_agent_function(
         Async function compatible with FunctionRegistry.
     """
     async def agent_generate(
-        prompt: str,
+        prompt: str = "Create a sphere",
         file_path: str | None = None,
     ) -> dict[str, Any]:
         """Generate data (mesh, volume, etc.) using an AI agent.
