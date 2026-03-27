@@ -2,7 +2,7 @@
 
 from ascribe_link.app import create_app
 from ascribe_link.federation import FederationClient, FederationHub
-from ascribe_link.processing import FunctionRegistry
+from ascribe_link.processing import FunctionRegistry, Range
 from ascribe_link.sandbox import (
     SandboxConfig,
     SandboxResult,
@@ -16,6 +16,7 @@ __all__ = [
     "FederationClient",
     "FederationHub",
     "FunctionRegistry",
+    "Range",
     "SandboxConfig",
     "SandboxResult",
     "SpecimenStore",
@@ -25,7 +26,11 @@ __all__ = [
 
 # Optional: agent generator (requires claude-agent-sdk)
 try:
-    from ascribe_link.agent_generator import generate_mesh_with_agent, create_agent_function
+    from ascribe_link.agent_generator import (
+        generate_mesh_with_agent,
+        create_agent_function,
+    )
+
     __all__.extend(["generate_mesh_with_agent", "create_agent_function"])
 except ImportError:
     pass

@@ -18,7 +18,15 @@ import asyncio
 import inspect
 from dataclasses import dataclass, field
 from itertools import chain
-from typing import Annotated, Any, Callable, Literal, get_args, get_origin, get_type_hints
+from typing import (
+    Annotated,
+    Any,
+    Callable,
+    Literal,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 import numpy as np
 
@@ -54,7 +62,9 @@ class FunctionRegistry:
     def __init__(self) -> None:
         self._functions: dict[str, Callable] = {}
         self._return_types: dict[str, str | None] = {}
-        self._specimens: dict[str, RegisteredSpecimen] = {}  # function_name -> specimen metadata
+        self._specimens: dict[
+            str, RegisteredSpecimen
+        ] = {}  # function_name -> specimen metadata
 
     def register(
         self,
@@ -273,9 +283,7 @@ class FunctionRegistry:
             raise KeyError(f"Unknown function: {name}")
 
         if asyncio.iscoroutinefunction(func):
-            raise TypeError(
-                f"Function '{name}' is async. Use invoke_async() instead."
-            )
+            raise TypeError(f"Function '{name}' is async. Use invoke_async() instead.")
 
         # Coerce kwargs to match function signature types (e.g., float -> int)
         kwargs = self._coerce_kwargs(func, kwargs or {})
@@ -285,14 +293,14 @@ class FunctionRegistry:
 
     def _coerce_kwargs(self, func: Callable, kwargs: dict[str, Any]) -> dict[str, Any]:
         """Coerce kwargs to match function signature types.
-        
+
         Handles common cases like float -> int when the signature expects int.
         """
         try:
             hints = get_type_hints(func)
         except Exception:
             return kwargs
-        
+
         coerced = {}
         for key, value in kwargs.items():
             expected_type = hints.get(key)
@@ -312,12 +320,15 @@ class FunctionRegistry:
         """Convert a raw function result to a typed ProcessingResult."""
 
         # Already a ProcessingResult
-        if isinstance(result, (MeshResult, VolumeResult, PointCloudResult, ImageResult)):
+        if isinstance(
+            result, (MeshResult, VolumeResult, PointCloudResult, ImageResult)
+        ):
             return result
 
         # Dict with 'type' field
         if isinstance(result, dict) and "type" in result:
             from ascribe_link.models import result_from_dict
+
             return result_from_dict(result)
 
         # Tuple: detect type based on structure and hints
@@ -412,7 +423,9 @@ class FunctionRegistry:
         if type_hint == "volume" or (type_hint is None and arr.ndim == 3):
             return VolumeResult.from_numpy(arr)
 
-        if type_hint == "image" or (type_hint is None and arr.ndim in (2, 3) and arr.ndim != 3):
+        if type_hint == "image" or (
+            type_hint is None and arr.ndim in (2, 3) and arr.ndim != 3
+        ):
             # 2D or 3D with channels
             return ImageResult.from_numpy(arr)
 
@@ -464,6 +477,33 @@ class FunctionRegistry:
 
 
 # ---------------------------------------------------------------------------
+# Range annotation for slider UI
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Range:
+    """Annotation for numeric parameters with min/max bounds.
+
+    Use with Annotated to generate JSON Schema with minimum/maximum:
+
+        from typing import Annotated
+        from ascribe_link.processing import Range
+
+        def my_function(
+            segments: Annotated[int, Range(3, 128)] = 32
+        ):
+            ...
+
+    This will generate JSON Schema with:
+        {"type": "number", "minimum": 3, "maximum": 128, "default": 32}
+    """
+
+    min: float | int
+    max: float | int
+
+
+# ---------------------------------------------------------------------------
 # Schema generation
 # ---------------------------------------------------------------------------
 
@@ -478,7 +518,15 @@ def _type_to_schema(annotation: Any) -> dict[str, Any]:
     # Annotated[T, ...metadata...]
     if origin is Annotated:
         base_type = args[0]
-        return _type_to_schema(base_type)
+        base_schema = _type_to_schema(base_type)
+
+        # Check metadata for Range annotation
+        for metadata in args[1:]:
+            if isinstance(metadata, Range):
+                base_schema["minimum"] = metadata.min
+                base_schema["maximum"] = metadata.max
+
+        return base_schema
 
     # Literal["a", "b"]
     if origin is Literal:
@@ -488,7 +536,9 @@ def _type_to_schema(annotation: Any) -> dict[str, Any]:
             schema["type"] = "string"
         elif values and all(isinstance(v, bool) for v in values):
             schema["type"] = "boolean"
-        elif values and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in values):
+        elif values and all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) for v in values
+        ):
             schema["type"] = "number"
         return schema
 
