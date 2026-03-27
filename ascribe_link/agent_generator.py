@@ -42,21 +42,43 @@ IMPORTANT: Do NOT use ToolSearch or any tool-listing commands.
 
 ## How to Submit
 
-Always save mesh to a JSON file, then call `submit_mesh_file`:
+Save mesh to JSON file with vertices, indices, and normals, then call `submit_mesh_file`:
 
 ```python
-import pyvista as pv
 import json
-from ascribe_link.mesh_utils import extract_mesh_data
 
-mesh = pv.Box(bounds=(-0.5, 0.5, -0.5, 0.5, -0.5, 0.5))  # <-- modify
-vertices, indices = extract_mesh_data(mesh)
+# After generating mesh data (vertices, indices, normals):
 with open("mesh.json", "w") as f:
-    json.dump({"vertices": vertices, "indices": indices}, f)
-print(f"Saved {len(vertices)} vertices, {len(indices)//3} triangles")
+    json.dump({"vertices": vertices, "indices": indices, "normals": normals}, f)
+print(f"Saved {len(vertices)} vertices")
 ```
 
 Then call: `submit_mesh_file(file_path="mesh.json")`
+
+## PyVista Example
+
+```python
+import pyvista as pv
+from ascribe_link.mesh_utils import extract_mesh_data
+
+mesh = pv.Sphere(radius=1.0)
+mesh = mesh.compute_normals()  # Add normals
+vertices, indices = extract_mesh_data(mesh)
+normals = mesh.point_normals.tolist()
+```
+
+## Marching Cubes Example (isosurface from volume)
+
+```python
+from skimage.measure import marching_cubes
+import numpy as np
+
+# volume is a 3D numpy array
+verts, faces, normals, values = marching_cubes(volume, level=threshold)
+vertices = verts.tolist()
+indices = faces.flatten().tolist()
+normals = normals.tolist()
+```
 
 ## PyVista Primitives
 
@@ -64,7 +86,6 @@ Then call: `submit_mesh_file(file_path="mesh.json")`
 pv.Sphere(radius=1.0, center=(0, 0, 0))
 pv.Box(bounds=(xmin, xmax, ymin, ymax, zmin, zmax))
 pv.Cylinder(radius=0.5, height=2.0)
-pv.ParametricTorus(ringradius=1.0, crosssectionradius=0.3)
 ```
 
 ## extract_mesh_data
@@ -97,6 +118,7 @@ class AgentResult:
     # Mesh data
     vertices: list[list[float]] | None = None
     indices: list[int] | None = None
+    normals: list[list[float]] | None = None
     # Volume data
     volume_shape: list[int] | None = None
     volume_dtype: str | None = None
@@ -288,7 +310,7 @@ async def generate_with_agent(
 
     @tool(
         "submit_mesh_file",
-        "Submit a mesh from a JSON file. Use this for large meshes. The file must have 'vertices' (array of [x,y,z]) and 'indices' (flat array of ints).",
+        "Submit a mesh from a JSON file. The file must have 'vertices' and 'indices', and optionally 'normals'.",
         submit_mesh_file_schema,
     )
     async def submit_mesh_file(args: dict) -> dict:
@@ -319,6 +341,7 @@ async def generate_with_agent(
 
         vertices = data.get("vertices", [])
         indices = data.get("indices", [])
+        normals = data.get("normals")  # Optional
 
         if not vertices:
             return {
@@ -343,13 +366,15 @@ async def generate_with_agent(
         result.result_type = "mesh"
         result.vertices = vertices
         result.indices = indices
+        result.normals = normals
         result.submitted = True
 
+        normals_info = f", {len(normals)} normals" if normals else ""
         return {
             "content": [
                 {
                     "type": "text",
-                    "text": f"Mesh submitted from file: {len(vertices)} vertices, {len(indices) // 3} triangles",
+                    "text": f"Mesh submitted from file: {len(vertices)} vertices, {len(indices) // 3} triangles{normals_info}",
                 }
             ]
         }
@@ -604,15 +629,19 @@ async def generate_with_agent(
     # Build result dictionary based on type
     if result.result_type == "mesh":
         logger.info(
-            "Mesh generated: %d vertices, %d triangles",
+            "Mesh generated: %d vertices, %d triangles, normals=%s",
             len(result.vertices),
             len(result.indices) // 3,
+            len(result.normals) if result.normals else 0,
         )
-        return {
+        output = {
             "type": "mesh",
             "vertices": result.vertices,
             "indices": result.indices,
         }
+        if result.normals:
+            output["normals"] = result.normals
+        return output
     elif result.result_type == "volume":
         logger.info(
             "Volume generated: %s (%s)",
