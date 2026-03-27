@@ -22,6 +22,13 @@ from ascribe_link.specimen_store import SpecimenStore
 
 logger = logging.getLogger(__name__)
 
+# Placeholder SVG for code-registered specimens without thumbnails
+_PLACEHOLDER_THUMBNAIL_SVG = b"""<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <rect width="128" height="128" fill="#2a2a3e"/>
+  <circle cx="64" cy="64" r="40" fill="none" stroke="#6366f1" stroke-width="3"/>
+  <circle cx="64" cy="64" r="20" fill="#6366f1" opacity="0.3"/>
+</svg>"""
+
 
 class SpecimenController(Controller):
     path = "/api/specimens"
@@ -195,6 +202,13 @@ class SpecimenController(Controller):
                 return Response(content=data, media_type=content_type)
             else:
                 raise NotFoundException(detail=f"Invalid thumbnail format for: {specimen_id}")
+
+        # Code-registered specimen without thumbnail — return placeholder
+        if function_registry.get_specimen(specimen_id) is not None:
+            return Response(
+                content=_PLACEHOLDER_THUMBNAIL_SVG,
+                media_type="image/svg+xml",
+            )
 
         # Filesystem specimen
         path = specimen_store.thumbnail_path(specimen_id)
