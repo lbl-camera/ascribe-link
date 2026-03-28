@@ -1,91 +1,36 @@
-from itertools import chain
-from ssl import PROTOCOL_TLS
-from typing import Callable, Sequence, Dict
+"""Ascribe-Link: HTTP server for Ascribe-XR processing and curated specimens."""
 
-import paho.mqtt.client as mqtt
-import numpy as np
-import json
+from ascribe_link.app import create_app
+from ascribe_link.federation import FederationClient, FederationHub
+from ascribe_link.processing import FunctionRegistry, Range
+from ascribe_link.sandbox import (
+    SandboxConfig,
+    SandboxResult,
+    is_firejail_available,
+    run_sandboxed,
+)
+from ascribe_link.specimen_store import SpecimenStore
 
-from ascribe_link.example import sphere_example
+__all__ = [
+    "create_app",
+    "FederationClient",
+    "FederationHub",
+    "FunctionRegistry",
+    "Range",
+    "SandboxConfig",
+    "SandboxResult",
+    "SpecimenStore",
+    "is_firejail_available",
+    "run_sandboxed",
+]
 
-# Define the enumerated functions for data processing
-def random_mesh(*args, **kwargs):
-    # Implement processing logic here
-    return np.random.rand(10, 3), np.random.randint(10, (10, 3))
+# Optional: agent generator (requires claude-agent-sdk)
+try:
+    from ascribe_link.agent_generator import (
+        generate_mesh_with_agent,
+        create_agent_function,
+    )
 
-# Define a dictionary mapping function names to implementations
-function_map = {
-    'sphere': sphere_example,
-    'random_mesh': random_mesh
-}
-
-def validate_mesh(points, indices):
-    # Check for non-finite vertices
-    bad_points = np.array(points)[~np.isfinite(points).all(axis=1)]
-    if len(bad_points):
-        print("Bad points:", bad_points)
-        raise ValueError("Mesh contains points with infinite values")
-
-# Define a callback for incoming processing requests
-def on_message(client, userdata, message):
-    topic = message.topic
-    request_data = json.loads(message.payload)
-    print(client, userdata, topic, request_data)
-    match topic:
-        case 'godot/processing_requests':
-            function_name = request_data['function_name']
-            args = request_data['args']
-            kwargs = request_data['kwargs']
-
-            # Call the corresponding function and serialize the result
-            result = function_map[function_name](*args, **kwargs)
-            result_data = {'vertices': list(chain.from_iterable(result[0])),
-                           'indices': result[1]}
-
-            # Validate before sending
-            validate_mesh(result[0], result[1])
-
-            # Publish the result to the processing responses topic
-            client.publish("python/processing_responses", json.dumps(result_data))
-        case 'godot/specimen_requests':
-            function_names = list(function_map.keys())
-            response = dict(names=function_names)
-            client.publish("python/specimen_responses", json.dumps(response))
-
-# The callback for when the client receives a CONNACK response from the server.
-def on_connect(client, userdata, flags, reason_code, properties):
-    print(f"Connected with result code {reason_code}")
-    # Subscribing in on_connect() means that if we lose the connection and
-    # reconnect then subscriptions will be renewed.
-    client.subscribe("$SYS/#")
-
-def serve(broker=None, port=1883, client=None, mesh_functions: Dict[str, Callable]=None):
-    if mesh_functions:
-        function_map.clear()
-        function_map.update(mesh_functions)
-
-    if client is None:
-        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-        client.connect(broker, port)
-
-    # Subscribe to the processing requests topic
-    client.subscribe("godot/processing_requests")
-
-    # Subscribe to the specimen requests topic
-    client.subscribe("godot/specimen_requests")
-
-    # Set the callback for incoming messages
-    client.on_message = on_message
-    client.on_connect = on_connect
-
-    # Start the MQTT loop
-    client.loop_forever()
-
-
-if __name__ == '__main__':
-    # Client setup
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)  # , transport="websockets")
-    client.connect("cam-web.lbl.gov", 1883)
-
-    # Start server
-    serve(client=client, mesh_functions={"Automated Thresholding":0, "Unsupervised ML":1, "Supervised ML":2})
+    __all__.extend(["generate_mesh_with_agent", "create_agent_function"])
+except ImportError:
+    pass
