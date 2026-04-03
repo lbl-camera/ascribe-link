@@ -10,7 +10,7 @@ import pyvista as pv
 from ascribe_link.models import MeshResult
 
 
-def generate_sphere(radius: float = 1.0, resolution: int = 32, name: str | None = None, fortnite: int | None = None) -> MeshResult:
+def generate_sphere(radius: float = 1.0, resolution: int = 32) -> MeshResult:
     """Generate a parametric sphere mesh.
 
     Parameters
