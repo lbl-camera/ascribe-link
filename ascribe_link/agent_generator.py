@@ -693,8 +693,8 @@ def create_agent_function(
     """
 
     async def agent_generate(
-        prompt: str = "Create a sphere",
-        file_path: str | None = None,
+        prompt: str = r"Load the CT head volume from PNG stack at C:\Users\rp\Documents\vr-start\specimen_data\cthead-8bit\ (files named cthead-8bit001.png through the last one). Stack them into a 3D array, then extract an isosurface using marching cubes at threshold 100. Submit the resulting mesh.",
+        file_path: str = "",
     ) -> dict[str, Any]:
         """Generate data (mesh, volume, etc.) using an AI agent.
 
