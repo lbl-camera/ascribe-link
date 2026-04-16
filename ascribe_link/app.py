@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -182,6 +183,23 @@ def create_app(
             status_code=500,
         )
 
+    # --- Lifecycle hooks for the job TTL sweeper ---
+    sweeper_task_holder: dict[str, asyncio.Task] = {}
+
+    async def _start_sweeper(app_: Litestar) -> None:
+        sweeper_task_holder["task"] = asyncio.create_task(
+            job_registry.run_sweeper(interval=30.0)
+        )
+
+    async def _stop_sweeper(app_: Litestar) -> None:
+        task = sweeper_task_holder.get("task")
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
     app = Litestar(
         route_handlers=route_handlers,
         dependencies={
@@ -201,6 +219,8 @@ def create_app(
             render_plugins=[SwaggerRenderPlugin()],
             path="/docs",
         ),
+        on_startup=[_start_sweeper],
+        on_shutdown=[_stop_sweeper],
     )
 
     return app
