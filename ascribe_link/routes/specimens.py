@@ -516,8 +516,24 @@ async def _proxy_federated_start(
     job_registry: JobRegistry,
     original_specimen_id: str,
 ) -> dict[str, str]:
-    """Placeholder — fully implemented in Task 8."""
-    raise HTTPException(
-        status_code=501,
-        detail="Federated jobs not yet implemented in this task",
+    """Start a job on a federated worker and proxy via a local relay-side Job."""
+    worker_response = await federation_hub.proxy_request(
+        worker_id,
+        "start_job",
+        {"specimen_id": actual_id, "params": params, "room_id": room_id},
     )
+    if "error" in worker_response:
+        raise HTTPException(
+            status_code=502, detail=f"Worker error: {worker_response['error']}"
+        )
+
+    worker_job_id = worker_response["job_id"]
+    relay_job = await job_registry.create(
+        specimen_id=original_specimen_id, params=params, room_id=room_id
+    )
+    relay_job.federated_to = (worker_id, worker_job_id)
+    # Inherit status from the worker — if the worker said "done" (cache hit),
+    # we record that locally so /result is served via a direct proxy fetch.
+    if worker_response.get("status") == "done":
+        relay_job.status = "done"
+    return {"job_id": relay_job.id, "status": relay_job.status}
