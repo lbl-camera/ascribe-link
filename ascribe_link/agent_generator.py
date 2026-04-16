@@ -42,10 +42,25 @@ def _emit_agent_events(msg: Any, reporter: ProgressReporter) -> None:
     Called from the receive_response() loop. Kept as a module-level function
     so it can be unit-tested with mocked SDK types without spinning up a
     real ClaudeSDKClient.
+
+    Handles the full set of SDK message types:
+    - AssistantMessage: text blocks, tool-use blocks (ThinkingBlock skipped)
+    - TaskProgressMessage: agent progress updates with description
+    - TaskNotificationMessage: task completed/failed summaries
+    - ToolResultBlock: only surfaces errors
+    - SessionMessage: extracts nested AssistantMessage content
+    - SystemMessage, UserMessage, etc.: silently ignored
     """
     # Import lazily so the module still imports when claude_agent_sdk
     # isn't installed (agent is an optional extra).
-    from claude_agent_sdk import AssistantMessage, TextBlock, ToolResultBlock
+    from claude_agent_sdk import (
+        AssistantMessage,
+        TextBlock,
+        ToolResultBlock,
+        TaskProgressMessage,
+        TaskNotificationMessage,
+        SessionMessage,
+    )
 
     if isinstance(msg, AssistantMessage):
         for block in msg.content:
@@ -56,6 +71,37 @@ def _emit_agent_events(msg: Any, reporter: ProgressReporter) -> None:
             elif hasattr(block, "name"):
                 # ToolUseBlock — report just the tool name.
                 reporter.report(f"Tool: {block.name}")
+            # ThinkingBlock — skip (internal reasoning, not user-facing)
+
+    elif isinstance(msg, TaskProgressMessage):
+        desc = getattr(msg, "description", "")
+        tool = getattr(msg, "last_tool_name", "")
+        if desc:
+            reporter.report(desc[:200])
+        elif tool:
+            reporter.report(f"Tool: {tool}")
+
+    elif isinstance(msg, TaskNotificationMessage):
+        status = getattr(msg, "status", "")
+        summary = getattr(msg, "summary", "")
+        if summary:
+            reporter.report(summary[:200])
+        elif status:
+            reporter.report(f"Task {status}")
+
+    elif isinstance(msg, SessionMessage):
+        # SessionMessage wraps a full message; extract content if it's
+        # an assistant message with blocks we can surface.
+        inner = getattr(msg, "message", None)
+        if inner and hasattr(inner, "content"):
+            for block in inner.content:
+                if isinstance(block, TextBlock):
+                    first_line = (block.text or "").strip().splitlines()
+                    if first_line:
+                        reporter.report(first_line[0][:200])
+                elif hasattr(block, "name"):
+                    reporter.report(f"Tool: {block.name}")
+
     elif isinstance(msg, ToolResultBlock):
         # Only surface errors; successful tool results are noisy.
         is_error = getattr(msg, "is_error", False)
@@ -620,9 +666,9 @@ async def generate_with_agent(
                     logger.info("Received message #%d: %s", msg_count, msg_type)
                     try:
                         _emit_agent_events(msg, reporter)
-                    except Exception:
+                    except Exception as _emit_err:
                         # Never let progress emission break the agent loop.
-                        pass
+                        logger.warning("_emit_agent_events failed: %s", _emit_err, exc_info=True)
 
                     if isinstance(msg, AssistantMessage):
                         for block in msg.content:
