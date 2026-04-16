@@ -1,6 +1,7 @@
 """Job endpoints: poll progress, fetch result, cancel."""
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from litestar import Controller, get, delete
@@ -35,11 +36,14 @@ class JobController(Controller):
                 "get_progress",
                 {"job_id": worker_job_id, "since": since},
             )
-            # Mirror the terminal status locally so /result can serve.
+            # Mirror the terminal status locally so /result can serve,
+            # and set finished_at so the TTL sweeper can collect the job.
             if response.get("status") in ("done", "error"):
                 job.status = response["status"]
                 if response.get("error"):
                     job.error = response["error"]
+                if job.finished_at is None:
+                    job.finished_at = time.monotonic()
             return response
 
         messages = [
@@ -98,5 +102,11 @@ class JobController(Controller):
             await federation_hub.proxy_request(
                 worker_id, "cancel_job", {"job_id": worker_job_id}
             )
+            # Federated jobs have no local task; mark finished so the sweeper
+            # collects the relay-side job.
+            job.status = "error"
+            job.error = "cancelled"
+            if job.finished_at is None:
+                job.finished_at = time.monotonic()
         if job.task is not None and not job.task.done():
             job.task.cancel()

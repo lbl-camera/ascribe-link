@@ -536,4 +536,5 @@ async def _proxy_federated_start(
     # we record that locally so /result is served via a direct proxy fetch.
     if worker_response.get("status") == "done":
         relay_job.status = "done"
+        relay_job.finished_at = time.monotonic()
     return {"job_id": relay_job.id, "status": relay_job.status}
