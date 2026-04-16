@@ -44,6 +44,23 @@ from ascribe_link.models import (
 from ascribe_link.progress import ProgressReporter
 
 
+def _is_reporter_annotation(annotation: Any) -> bool:
+    """Check whether an annotation refers to ProgressReporter.
+
+    Handles direct class reference, union (ProgressReporter | None),
+    and string annotations from `from __future__ import annotations`.
+    """
+    if annotation is ProgressReporter:
+        return True
+    # Union type: ProgressReporter | None  (types.UnionType in 3.10+)
+    if hasattr(annotation, "__args__"):
+        return ProgressReporter in annotation.__args__
+    # String annotations
+    if isinstance(annotation, str) and "ProgressReporter" in annotation:
+        return True
+    return False
+
+
 @dataclass
 class RegisteredSpecimen:
     """Metadata for a specimen registered via code."""
@@ -253,15 +270,25 @@ class FunctionRegistry:
         reporter: ProgressReporter | None,
     ) -> dict[str, Any]:
         """If the function declares a ProgressReporter parameter, inject it."""
+        effective = reporter if reporter is not None else ProgressReporter()
+
         try:
             hints = get_type_hints(func)
+            for param_name, annotation in hints.items():
+                if _is_reporter_annotation(annotation):
+                    return {**kwargs, param_name: effective}
         except Exception:
-            return kwargs
-        effective = reporter if reporter is not None else ProgressReporter()
-        for param_name, annotation in hints.items():
-            if annotation is ProgressReporter:
-                kwargs = {**kwargs, param_name: effective}
-                break
+            pass
+
+        # Fallback: inspect.signature for raw/string annotations.
+        try:
+            sig = inspect.signature(func)
+            for param_name, param in sig.parameters.items():
+                if _is_reporter_annotation(param.annotation):
+                    return {**kwargs, param_name: effective}
+        except Exception:
+            pass
+
         return kwargs
 
     async def invoke_async(
@@ -585,7 +612,7 @@ def create_schema(func: Callable) -> dict[str, Any]:
 
     for param_name, param in sig.parameters.items():
         annotation = resolved.get(param_name, param.annotation)
-        if annotation is ProgressReporter:
+        if _is_reporter_annotation(annotation):
             continue  # Injected by registry; not a user-facing parameter.
         prop_schema = _type_to_schema(annotation)
         if param.default is not inspect.Parameter.empty:

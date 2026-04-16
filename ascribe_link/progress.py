@@ -39,4 +39,9 @@ class JobReporter(ProgressReporter):
         self._job = job
 
     def report(self, text: str) -> None:
+        import logging
         self._job.append_message(text)
+        logging.getLogger(__name__).info(
+            "JobReporter: appended seq=%d text=%s (deque size=%d)",
+            self._job.next_seq - 1, text[:80], len(self._job.messages),
+        )

@@ -481,13 +481,26 @@ async def _run_job(
     result_cache: RoomResultCache,
     func_name: str,
 ) -> None:
-    """Execute the specimen function, populating the job's result/status."""
+    """Execute the specimen function, populating the job's result/status.
+
+    The function is run in a separate thread (with its own event loop) so that
+    long-running or event-loop-blocking functions (like the AI agent, which
+    uses ClaudeSDKClient) don't prevent the main event loop from serving poll
+    requests on /api/jobs/{id}/progress.
+
+    The JobReporter writes to the job's message deque from the worker thread;
+    this is safe under CPython's GIL (single-appender deque + atomic append).
+    """
     reporter = JobReporter(job)
     job.append_message(f"Starting {job.specimen_id}")
     t0 = time.monotonic()
     try:
-        result = await function_registry.invoke_async(
-            func_name, [], job.params, reporter=reporter
+        result = await asyncio.to_thread(
+            _invoke_in_thread,
+            function_registry,
+            func_name,
+            job.params,
+            reporter,
         )
         result_dict = result_to_dict(result)
         result_cache.put(job.room_id, func_name, job.params, result_dict)
@@ -505,6 +518,26 @@ async def _run_job(
         job.append_message(f"Error: {e}")
     finally:
         job.finished_at = time.monotonic()
+
+
+def _invoke_in_thread(
+    function_registry: FunctionRegistry,
+    func_name: str,
+    params: dict,
+    reporter: JobReporter,
+) -> Any:
+    """Run the specimen function in a fresh event loop on a worker thread.
+
+    This keeps the main asyncio event loop free for HTTP request handling
+    while the (potentially blocking) function runs.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(
+            function_registry.invoke_async(func_name, [], params, reporter=reporter)
+        )
+    finally:
+        loop.close()
 
 
 async def _proxy_federated_start(
