@@ -50,11 +50,6 @@ class JobController(Controller):
             {"seq": m.seq, "text": m.text, "ts": m.ts}
             for m in job.messages_since(since)
         ]
-        import logging
-        logging.getLogger(__name__).info(
-            "GET /progress job=%s since=%d → %d msgs, status=%s, next_seq=%d",
-            job_id[:8], since, len(messages), job.status, job.next_seq,
-        )
         return {
             "status": job.status,
             "messages": messages,

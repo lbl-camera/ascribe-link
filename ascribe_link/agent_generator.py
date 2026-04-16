@@ -62,21 +62,11 @@ def _emit_agent_events(msg: Any, reporter: ProgressReporter) -> None:
         SessionMessage,
     )
 
-    msg_type = type(msg).__name__
-    is_match = isinstance(msg, AssistantMessage)
-    print(f"[DIAG] _emit_agent_events: type={msg_type}, isinstance(AM)={is_match}, id(class)={id(AssistantMessage)}, id(msg.__class__)={id(type(msg))}")
-    if hasattr(msg, 'content'):
-        print(f"[DIAG]   content types: {[type(b).__name__ for b in msg.content]}")
-
     if isinstance(msg, AssistantMessage):
         for block in msg.content:
-            is_tb = isinstance(block, TextBlock)
-            print(f"[DIAG]   block type={type(block).__name__}, isinstance(TB)={is_tb}, reporter={type(reporter).__name__}")
-            if is_tb:
+            if isinstance(block, TextBlock):
                 first_line = (block.text or "").strip().splitlines()
-                print(f"[DIAG]   text lines={first_line[:3]}")
                 if first_line:
-                    print(f"[DIAG]   calling reporter.report({first_line[0][:60]!r})")
                     reporter.report(first_line[0][:200])
             elif hasattr(block, "name"):
                 # ToolUseBlock — report just the tool name.
