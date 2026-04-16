@@ -30,3 +30,13 @@ class ProgressReporter:
     def report(self, text: str) -> None:
         """Append a progress message. No-op in the base class."""
         return None
+
+
+class JobReporter(ProgressReporter):
+    """Reporter that appends messages to a specific Job's deque."""
+
+    def __init__(self, job: "Job") -> None:  # noqa: F821 — forward ref
+        self._job = job
+
+    def report(self, text: str) -> None:
+        self._job.append_message(text)
