@@ -41,6 +41,7 @@ from ascribe_link.models import (
     VolumeResult,
     result_to_dict,
 )
+from ascribe_link.progress import ProgressReporter
 
 
 @dataclass
@@ -245,11 +246,30 @@ class FunctionRegistry:
     def get(self, name: str) -> Callable | None:
         return self._functions.get(name)
 
+    def _inject_reporter(
+        self,
+        func: Callable,
+        kwargs: dict[str, Any],
+        reporter: ProgressReporter | None,
+    ) -> dict[str, Any]:
+        """If the function declares a ProgressReporter parameter, inject it."""
+        try:
+            hints = get_type_hints(func)
+        except Exception:
+            return kwargs
+        effective = reporter if reporter is not None else ProgressReporter()
+        for param_name, annotation in hints.items():
+            if annotation is ProgressReporter:
+                kwargs = {**kwargs, param_name: effective}
+                break
+        return kwargs
+
     async def invoke_async(
         self,
         name: str,
         args: list | None = None,
         kwargs: dict | None = None,
+        reporter: ProgressReporter | None = None,
     ) -> ProcessingResult:
         """Invoke a function (async-aware) and return typed result."""
         func = self._functions.get(name)
@@ -258,6 +278,7 @@ class FunctionRegistry:
 
         # Coerce kwargs to match function signature types (e.g., float -> int)
         kwargs = self._coerce_kwargs(func, kwargs or {})
+        kwargs = self._inject_reporter(func, kwargs, reporter)
 
         # Call function (handle both sync and async)
         if asyncio.iscoroutinefunction(func):
@@ -564,6 +585,8 @@ def create_schema(func: Callable) -> dict[str, Any]:
 
     for param_name, param in sig.parameters.items():
         annotation = resolved.get(param_name, param.annotation)
+        if annotation is ProgressReporter:
+            continue  # Injected by registry; not a user-facing parameter.
         prop_schema = _type_to_schema(annotation)
         if param.default is not inspect.Parameter.empty:
             prop_schema["default"] = param.default
