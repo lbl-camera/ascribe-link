@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from litestar import Controller, Response, get, delete
+from litestar import Controller, get, delete
 from litestar.exceptions import HTTPException, NotFoundException
 
 from ascribe_link.job_registry import JobRegistry
@@ -40,15 +40,15 @@ class JobController(Controller):
         self,
         job_registry: JobRegistry,
         job_id: str,
-    ) -> Response | dict[str, Any]:
+    ) -> dict[str, Any]:
         job = await job_registry.get(job_id)
         if job is None:
             raise NotFoundException(detail=f"Unknown job: {job_id}")
         if job.status == "running":
-            return Response(status_code=409, content={"error": "Job still running"})
+            raise HTTPException(status_code=409, detail="Job still running")
         if job.status == "error":
-            return Response(
-                status_code=410, content={"error": f"Job failed: {job.error}"}
+            raise HTTPException(
+                status_code=410, detail=f"Job failed: {job.error}"
             )
         # status == "done"
         if isinstance(job.result, dict):

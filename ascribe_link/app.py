@@ -163,7 +163,7 @@ def create_app(
         route_handlers.append(FederationController)
 
     # --- Exception handler for debugging ---
-    def log_exception_handler(request, exc: Exception):
+    def log_exception_handler(request, exc: Exception) -> None:
         import traceback
         logger.error("Unhandled exception: %s\n%s", exc, traceback.format_exc())
         raise exc  # Re-raise to let Litestar handle the response
