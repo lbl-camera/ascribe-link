@@ -14,8 +14,10 @@ from litestar.openapi.plugins import SwaggerRenderPlugin
 
 from ascribe_link.cache import RoomResultCache
 from ascribe_link.federation import FederationHub
+from ascribe_link.job_registry import JobRegistry
 from ascribe_link.processing import FunctionRegistry
 from ascribe_link.routes.federation import FederationController
+from ascribe_link.routes.jobs import JobController
 from ascribe_link.routes.processing import ProcessingController
 from ascribe_link.routes.specimens import SpecimenController
 from ascribe_link.specimen_store import SpecimenStore
@@ -135,6 +137,10 @@ def create_app(
     result_cache = RoomResultCache(ttl_seconds=300.0)  # 5 minute TTL
     logger.info("Room result cache enabled (TTL=300s)")
 
+    # --- Job registry for progress-tracked dynamic loads ---
+    job_registry = JobRegistry(ttl_seconds=300.0)
+    logger.info("Job registry enabled (TTL=300s)")
+
     # --- Dependencies ---
     def provide_specimen_store() -> SpecimenStore:
         return store
@@ -148,13 +154,16 @@ def create_app(
     def provide_result_cache() -> RoomResultCache:
         return result_cache
 
+    def provide_job_registry() -> JobRegistry:
+        return job_registry
+
     # --- Route handlers ---
-    route_handlers = [SpecimenController, ProcessingController]
+    route_handlers = [SpecimenController, ProcessingController, JobController]
     if relay_mode:
         route_handlers.append(FederationController)
 
     # --- Exception handler for debugging ---
-    def log_exception_handler(request, exc: Exception) -> None:
+    def log_exception_handler(request, exc: Exception):
         import traceback
         logger.error("Unhandled exception: %s\n%s", exc, traceback.format_exc())
         raise exc  # Re-raise to let Litestar handle the response
@@ -166,9 +175,10 @@ def create_app(
             "function_registry": Provide(provide_function_registry, sync_to_thread=False),
             "federation_hub": Provide(provide_federation_hub, sync_to_thread=False),
             "result_cache": Provide(provide_result_cache, sync_to_thread=False),
+            "job_registry": Provide(provide_job_registry, sync_to_thread=False),
         },
         cors_config=CORSConfig(allow_origins=["*"]),
-        exception_handlers={Exception: log_exception_handler},
+        exception_handlers={},
         debug=True,
         openapi_config=OpenAPIConfig(
             title="ASCRIBE-Link",

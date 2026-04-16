@@ -2,22 +2,26 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
 import mimetypes
+import time
 from pathlib import Path
 from typing import Any
 
 from litestar import Controller, Response, get, post
 from litestar.di import Provide
-from litestar.exceptions import NotFoundException
+from litestar.exceptions import HTTPException, NotFoundException
 from litestar.response import File
 
 from ascribe_link.cache import RoomResultCache
 from ascribe_link.federation import FederationHub
+from ascribe_link.job_registry import Job, JobRegistry
 from ascribe_link.models import SpecimenListItem, SpecimenMetadata, SpecimenType, result_to_dict
 from ascribe_link.processing import FunctionRegistry
+from ascribe_link.progress import JobReporter
 from ascribe_link.specimen_store import SpecimenStore
 
 logger = logging.getLogger(__name__)
@@ -381,6 +385,78 @@ class SpecimenController(Controller):
             room_id=data.get("room_id", "ascribe"),
         )
 
+    @post("/{specimen_id:str}/start", status_code=200)
+    async def start_job(
+        self,
+        specimen_store: SpecimenStore,
+        specimen_id: str,
+        function_registry: FunctionRegistry,
+        result_cache: RoomResultCache,
+        job_registry: JobRegistry,
+        federation_hub: FederationHub | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> dict[str, str]:
+        """Start a dynamic specimen load as a background job.
+
+        Returns `{job_id, status}`. Status is "done" on cache hit; else "running".
+        """
+        data = data or {}
+        params: dict[str, Any] = data.get("params", {}) or {}
+        room_id: str = data.get("room_id", "ascribe")
+
+        # Resolve the specimen and ensure it's dynamic.
+        if ":" in specimen_id and federation_hub:
+            # Federated — proxy to worker (handled in Task 8).
+            worker_id, actual_id = specimen_id.split(":", 1)
+            return await _proxy_federated_start(
+                federation_hub,
+                worker_id,
+                actual_id,
+                params,
+                room_id,
+                job_registry,
+                specimen_id,
+            )
+
+        meta = function_registry.get_specimen(specimen_id)
+        if meta is None:
+            meta = specimen_store.get(specimen_id)
+        if meta is None:
+            raise NotFoundException(detail=f"Specimen not found: {specimen_id}")
+        if not meta.function_name:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Specimen {specimen_id} is static; use GET /data instead",
+            )
+
+        # Extract defaults if params not provided.
+        if not params and meta.schema:
+            params = _extract_schema_defaults(meta.schema)
+
+        job = await job_registry.create(
+            specimen_id=specimen_id, params=params, room_id=room_id
+        )
+
+        # Cache hit shortcut — no task needed.
+        cached = result_cache.get(room_id, meta.function_name, params)
+        if cached is not None:
+            job.append_message("cache hit")
+            job.result = cached
+            job.status = "done"
+            job.finished_at = time.monotonic()
+            return {"job_id": job.id, "status": "done"}
+
+        # Spawn the runner task; register it so DELETE can cancel.
+        job.task = asyncio.create_task(
+            _run_job(
+                job=job,
+                function_registry=function_registry,
+                result_cache=result_cache,
+                func_name=meta.function_name,
+            )
+        )
+        return {"job_id": job.id, "status": "running"}
+
     @get("/reload")
     async def reload_specimens(self, specimen_store: SpecimenStore) -> dict[str, int]:
         """Re-scan the specimens directory."""
@@ -396,3 +472,52 @@ def _extract_schema_defaults(schema: dict[str, Any]) -> dict[str, Any]:
         if "default" in prop:
             defaults[key] = prop["default"]
     return defaults
+
+
+async def _run_job(
+    *,
+    job: Job,
+    function_registry: FunctionRegistry,
+    result_cache: RoomResultCache,
+    func_name: str,
+) -> None:
+    """Execute the specimen function, populating the job's result/status."""
+    reporter = JobReporter(job)
+    job.append_message(f"Starting {job.specimen_id}")
+    t0 = time.monotonic()
+    try:
+        result = await function_registry.invoke_async(
+            func_name, [], job.params, reporter=reporter
+        )
+        result_dict = result_to_dict(result)
+        result_cache.put(job.room_id, func_name, job.params, result_dict)
+        job.result = result_dict
+        job.status = "done"
+        job.append_message(f"Finished in {time.monotonic() - t0:.2f}s")
+    except asyncio.CancelledError:
+        job.status = "error"
+        job.error = "cancelled"
+        job.append_message("Cancelled")
+        raise
+    except Exception as e:
+        job.status = "error"
+        job.error = str(e)
+        job.append_message(f"Error: {e}")
+    finally:
+        job.finished_at = time.monotonic()
+
+
+async def _proxy_federated_start(
+    federation_hub: FederationHub,
+    worker_id: str,
+    actual_id: str,
+    params: dict,
+    room_id: str,
+    job_registry: JobRegistry,
+    original_specimen_id: str,
+) -> dict[str, str]:
+    """Placeholder — fully implemented in Task 8."""
+    raise HTTPException(
+        status_code=501,
+        detail="Federated jobs not yet implemented in this task",
+    )
