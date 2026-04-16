@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ascribe_link.progress import ProgressReporter
 from ascribe_link.sandbox import (
     SandboxConfig,
     is_firejail_available,
@@ -28,6 +29,40 @@ from ascribe_link.sandbox import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Agent event emission
+# ---------------------------------------------------------------------------
+
+
+def _emit_agent_events(msg: Any, reporter: ProgressReporter) -> None:
+    """Translate an SDK message to one or more reporter.report() calls.
+
+    Called from the receive_response() loop. Kept as a module-level function
+    so it can be unit-tested with mocked SDK types without spinning up a
+    real ClaudeSDKClient.
+    """
+    # Import lazily so the module still imports when claude_agent_sdk
+    # isn't installed (agent is an optional extra).
+    from claude_agent_sdk import AssistantMessage, TextBlock, ToolResultBlock
+
+    if isinstance(msg, AssistantMessage):
+        for block in msg.content:
+            if isinstance(block, TextBlock):
+                first_line = (block.text or "").strip().splitlines()
+                if first_line:
+                    reporter.report(first_line[0][:200])
+            elif hasattr(block, "name"):
+                # ToolUseBlock — report just the tool name.
+                reporter.report(f"Tool: {block.name}")
+    elif isinstance(msg, ToolResultBlock):
+        # Only surface errors; successful tool results are noisy.
+        is_error = getattr(msg, "is_error", False)
+        if is_error:
+            content = getattr(msg, "content", None)
+            summary = str(content)[:120] if content else "unknown"
+            reporter.report(f"Tool error: {summary}")
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +178,7 @@ async def generate_with_agent(
     working_dir: str | None = None,
     sandbox: bool = True,
     sandbox_config: SandboxConfig | None = None,
+    reporter: ProgressReporter | None = None,
 ) -> dict[str, Any]:
     """Generate data (mesh, volume, etc.) using an AI agent.
 
@@ -190,6 +226,7 @@ async def generate_with_agent(
     )
 
     result = AgentResult()
+    reporter = reporter or ProgressReporter()
     sandbox_config = sandbox_config or SandboxConfig()
 
     # Check sandbox availability
@@ -581,6 +618,11 @@ async def generate_with_agent(
                     msg_count += 1
                     msg_type = type(msg).__name__
                     logger.info("Received message #%d: %s", msg_count, msg_type)
+                    try:
+                        _emit_agent_events(msg, reporter)
+                    except Exception:
+                        # Never let progress emission break the agent loop.
+                        pass
 
                     if isinstance(msg, AssistantMessage):
                         for block in msg.content:
@@ -605,6 +647,11 @@ async def generate_with_agent(
 
                     # Check if we got a result
                     if result.submitted:
+                        reporter.report(
+                            f"{result.result_type.capitalize()} submitted"
+                            if result.result_type
+                            else "Result submitted"
+                        )
                         logger.info("Result submitted, exiting response loop")
                         return
 
@@ -695,6 +742,7 @@ def create_agent_function(
     async def agent_generate(
         prompt: str = r"Load the CT head volume from PNG stack at C:\Users\rp\Documents\vr-start\specimen_data\cthead-8bit\ (files named cthead-8bit001.png through the last one). Stack them into a 3D array, then extract an isosurface using marching cubes at threshold 100. Submit the resulting mesh.",
         file_path: str = "",
+        reporter: ProgressReporter | None = None,
     ) -> dict[str, Any]:
         """Generate data (mesh, volume, etc.) using an AI agent.
 
@@ -722,6 +770,7 @@ def create_agent_function(
             timeout=timeout,
             sandbox=sandbox,
             sandbox_config=sandbox_config,
+            reporter=reporter,
         )
 
     return agent_generate
