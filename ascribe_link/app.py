@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from litestar import Litestar
+from litestar import Litestar, Response
 from litestar.config.cors import CORSConfig
 from litestar.di import Provide
 from litestar.openapi import OpenAPIConfig
@@ -162,11 +162,25 @@ def create_app(
     if relay_mode:
         route_handlers.append(FederationController)
 
-    # --- Exception handler for debugging ---
-    def log_exception_handler(request, exc: Exception) -> None:
+    # --- Exception handler ---
+    # Logs non-HTTP exceptions with a traceback (real runtime errors) and
+    # mirrors Litestar's default response for HTTPException (expected control
+    # flow: 404, 409, 410, etc.). Returning a Response avoids the re-raise
+    # loop that happens when the handler re-enters itself.
+    def log_exception_handler(request, exc: Exception) -> Response:
+        from litestar.exceptions import HTTPException
+
+        if isinstance(exc, HTTPException):
+            return Response(
+                content={"status_code": exc.status_code, "detail": exc.detail},
+                status_code=exc.status_code,
+            )
         import traceback
         logger.error("Unhandled exception: %s\n%s", exc, traceback.format_exc())
-        raise exc  # Re-raise to let Litestar handle the response
+        return Response(
+            content={"status_code": 500, "detail": "Internal Server Error"},
+            status_code=500,
+        )
 
     app = Litestar(
         route_handlers=route_handlers,
@@ -178,7 +192,7 @@ def create_app(
             "job_registry": Provide(provide_job_registry, sync_to_thread=False),
         },
         cors_config=CORSConfig(allow_origins=["*"]),
-        exception_handlers={},
+        exception_handlers={Exception: log_exception_handler},
         debug=True,
         openapi_config=OpenAPIConfig(
             title="ASCRIBE-Link",
