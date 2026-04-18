@@ -343,14 +343,39 @@ class SpecimenController(Controller):
         function_registry: FunctionRegistry,
         result_cache: RoomResultCache,
         federation_hub: FederationHub | None = None,
+        params: str | None = None,
+        room_id: str = "ascribe",
     ) -> Response | File | dict[str, Any]:
-        """GET handler for specimen data (uses default parameters for dynamic specimens)."""
+        """GET handler for specimen data.
+
+        Static specimens: returns the data file (no query params used).
+        Dynamic specimens: pass ``?params=<JSON>&room_id=<id>`` to invoke the
+        function with custom inputs sharing the same room cache as the POST
+        endpoint. With no ``params`` query, schema defaults are used.
+        """
+        parsed_params: dict[str, Any] = {}
+        if params:
+            try:
+                parsed = json.loads(params)
+            except json.JSONDecodeError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid 'params' query string (must be JSON): {exc}",
+                ) from exc
+            if not isinstance(parsed, dict):
+                raise HTTPException(
+                    status_code=400,
+                    detail="'params' query string must encode a JSON object",
+                )
+            parsed_params = parsed
         return await self._get_data_impl(
             specimen_store=specimen_store,
             specimen_id=specimen_id,
             function_registry=function_registry,
             result_cache=result_cache,
             federation_hub=federation_hub,
+            params=parsed_params,
+            room_id=room_id,
         )
 
     @post("/{specimen_id:str}/data")
