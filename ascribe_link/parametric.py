@@ -5,9 +5,10 @@ These functions generate 3D data from parameters, suitable for dynamic specimens
 
 from __future__ import annotations
 
+import numpy as np
 import pyvista as pv
 
-from ascribe_link.models import MeshResult
+from ascribe_link.models import MeshResult, VolumeResult
 
 
 def generate_sphere(radius: float = 1.0, resolution: int = 32) -> MeshResult:
@@ -61,3 +62,36 @@ def generate_torus(
     # Resample to target resolution
     torus = torus.subdivide(segments // 16, subfilter="butterfly")
     return MeshResult.from_pyvista(torus)
+
+
+def generate_gaussian_volume(resolution: int = 64, sigma: float = 0.3) -> VolumeResult:
+    """Generate a 3D Gaussian blob centered in a unit cube.
+
+    Parameters
+    ----------
+    resolution : int
+        Number of voxels per axis (clamped to [32, 256]).
+    sigma : float
+        Standard deviation of the Gaussian relative to the cube edge
+        (clamped to [0.05, 1.0]).
+
+    Returns
+    -------
+    VolumeResult
+        float32 volume, shape [resolution]*3, normalized so peak == 1.0.
+    """
+    resolution = max(32, min(256, int(resolution)))
+    sigma = max(0.05, min(1.0, float(sigma)))
+
+    axis = np.linspace(-0.5, 0.5, resolution, dtype=np.float32)
+    z, y, x = np.meshgrid(axis, axis, axis, indexing="ij")
+    r2 = x * x + y * y + z * z
+    volume = np.exp(-r2 / (2.0 * sigma * sigma)).astype(np.float32)
+    # Normalize so peak == 1.0 exactly (the discrete grid may not sample
+    # the true continuous peak at r=0, especially for even resolutions).
+    volume /= volume.max()
+    return VolumeResult.from_numpy(
+        volume,
+        spacing=[1.0 / resolution, 1.0 / resolution, 1.0 / resolution],
+        origin=[0.0, 0.0, 0.0],
+    )
