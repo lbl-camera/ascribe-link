@@ -219,7 +219,7 @@ class AgentResult:
 async def generate_with_agent(
     prompt: str,
     file_path: str | None = None,
-    model: str = "claude-sonnet-4",
+    model: str = "claude-sonnet-4-5",
     timeout: float = 300.0,
     working_dir: str | None = None,
     sandbox: bool = True,
@@ -761,7 +761,7 @@ async def generate_with_agent(
 
 
 def create_agent_function(
-    model: str = "claude-sonnet-4",
+    model: str = "claude-sonnet-4-5",
     timeout: float = 300.0,
     sandbox: bool = True,
     sandbox_config: SandboxConfig | None = None,

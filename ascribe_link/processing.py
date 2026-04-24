@@ -568,11 +568,14 @@ def _type_to_schema(annotation: Any) -> dict[str, Any]:
         base_type = args[0]
         base_schema = _type_to_schema(base_type)
 
-        # Check metadata for Range annotation
         for metadata in args[1:]:
             if isinstance(metadata, Range):
                 base_schema["minimum"] = metadata.min
                 base_schema["maximum"] = metadata.max
+            elif isinstance(metadata, str):
+                # String metadata is a UI widget hint (e.g. "textarea").
+                # Clients like the Godot procedural UI dispatch on "type".
+                base_schema["type"] = metadata
 
         return base_schema
 
