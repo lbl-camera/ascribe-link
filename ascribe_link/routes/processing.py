@@ -11,12 +11,23 @@ from litestar.exceptions import NotFoundException
 from ascribe_link.cache import RoomResultCache
 from ascribe_link.models import (
     FunctionInfo,
+    ImageResult,
+    MeshResult,
+    PointCloudResult,
     ProcessingRequest,
+    VolumeResult,
     result_to_dict,
 )
 from ascribe_link.processing import FunctionRegistry
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_to_dict(cached: Any) -> Any:
+    """Return a JSON-ready dict from the cache, whether it's a raw Result or already a dict."""
+    if isinstance(cached, (MeshResult, VolumeResult, PointCloudResult, ImageResult)):
+        return result_to_dict(cached)
+    return cached
 
 
 class ProcessingController(Controller):
@@ -99,7 +110,7 @@ class ProcessingController(Controller):
                 data.function_name,
                 list(data.kwargs.keys()),
             )
-            return cached_result
+            return _coerce_to_dict(cached_result)
         
         logger.info(
             "Cache miss: room=%s, function=%s, params=%s - computing result",
@@ -134,15 +145,16 @@ class ProcessingController(Controller):
             logger.error("Error invoking %s: %s\n%s", data.function_name, e, traceback.format_exc())
             raise
         
-        # Cache the result
-        result_cache.put(room_id, data.function_name, data.kwargs, result_dict)
+        # Cache the raw Result so the cache shape stays uniform across endpoints.
+        # Consumers (this route, /api/specimens/{id}/data, etc.) normalize on read.
+        result_cache.put(room_id, data.function_name, data.kwargs, result)
         logger.info(
             "Cached result: room=%s, function=%s, vertices=%d",
             room_id,
             data.function_name,
             len(result_dict.get("vertices", [])) if result_dict.get("type") == "mesh" else 0,
         )
-        
+
         return result_dict
 
     @get("/cache/stats")

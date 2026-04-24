@@ -21,7 +21,7 @@ class CachedResult:
     room_id: str
     function_name: str
     params_hash: str
-    result: dict[str, Any]
+    result: Any
     timestamp: float
     access_count: int = 0
 
@@ -54,7 +54,7 @@ class RoomResultCache:
         room_id: str,
         function_name: str,
         params: dict[str, Any],
-    ) -> dict[str, Any] | None:
+    ) -> Any | None:
         """Get a cached result if available.
 
         Parameters
@@ -68,8 +68,10 @@ class RoomResultCache:
 
         Returns
         -------
-        dict | None
-            Cached result if found and valid, otherwise None
+        Any | None
+            Cached result if found and valid, otherwise None.
+            Stored objects may be raw Result instances or dicts;
+            callers must handle either shape.
         """
         params_hash = self._hash_params(params)
 
@@ -100,7 +102,7 @@ class RoomResultCache:
         room_id: str,
         function_name: str,
         params: dict[str, Any],
-        result: dict[str, Any],
+        result: Any,
     ) -> None:
         """Store a processing result in the cache.
 
@@ -114,8 +116,10 @@ class RoomResultCache:
             Name of the processing function
         params : dict
             Function parameters
-        result : dict
-            Processing result to cache
+        result : Any
+            Processing result to cache. May be a raw Result
+            (MeshResult/VolumeResult/...) or a JSON-ready dict;
+            consumers are responsible for normalizing on read.
         """
         params_hash = self._hash_params(params)
 
