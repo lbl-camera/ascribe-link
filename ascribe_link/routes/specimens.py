@@ -327,10 +327,20 @@ class SpecimenController(Controller):
                 media_type=ENVELOPE_MEDIA_TYPE,
             )
 
-        # Static specimen: return the file
+        # Static specimen
         path = specimen_store.data_path(specimen_id)
         if path is None:
             raise NotFoundException(detail=f"Data file not found for: {specimen_id}")
+
+        # Volumes -> envelope; raw mesh files -> stream as-is.
+        if meta.type == SpecimenType.VOLUME and path.suffix.lower() == ".npy":
+            from ascribe_link.specimen_store import load_static_volume
+            result = load_static_volume(path.parent, path.name)
+            return Response(
+                content=encode_envelope(result),
+                media_type=ENVELOPE_MEDIA_TYPE,
+            )
+
         content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         return File(
             path=path,

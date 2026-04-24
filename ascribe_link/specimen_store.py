@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
+
 from ascribe_link.models import SpecimenMetadata, SpecimenType
 
 
@@ -124,3 +126,40 @@ class SpecimenStore:
             schema=raw.get("schema"),
             function_name=raw.get("function_name"),
         )
+
+
+def load_static_volume(spec_dir: Path, data_file: str) -> "VolumeResult":
+    """Load a static volume specimen from disk (currently .npy + optional .json sidecar).
+
+    Parameters
+    ----------
+    spec_dir : Path
+        Directory containing the specimen bundle.
+    data_file : str
+        Filename (within spec_dir) of the volume data, e.g. "data.npy".
+
+    Returns
+    -------
+    VolumeResult
+    """
+    from ascribe_link.models import VolumeResult  # avoid import cycle
+
+    data_path = spec_dir / data_file
+    if not data_path.exists():
+        raise FileNotFoundError(f"volume data missing: {data_path}")
+    if data_path.suffix.lower() != ".npy":
+        raise ValueError(f"unsupported static volume format: {data_path.suffix}")
+
+    arr = np.load(data_path, mmap_mode="r")
+    if arr.ndim != 3:
+        raise ValueError(f"static volume must be 3D, got ndim={arr.ndim}")
+
+    sidecar = data_path.with_suffix(".json")
+    spacing: list[float] | None = None
+    origin: list[float] | None = None
+    if sidecar.exists():
+        meta = json.loads(sidecar.read_text())
+        spacing = meta.get("spacing")
+        origin = meta.get("origin")
+
+    return VolumeResult.from_numpy(np.ascontiguousarray(arr), spacing=spacing, origin=origin)
