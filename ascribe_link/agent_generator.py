@@ -824,3 +824,40 @@ def create_agent_function(
 
 # Backwards compatibility alias
 generate_mesh_with_agent = generate_with_agent
+
+
+# ---------------------------------------------------------------------------
+# Output dispatcher: coerce arbitrary agent return values into a typed Result
+# ---------------------------------------------------------------------------
+
+
+def wrap_agent_output(value: Any):
+    """Coerce an arbitrary agent Python return value into a typed Result.
+
+    Dispatch:
+    - VolumeResult / MeshResult -> passthrough
+    - numpy.ndarray (ndim == 3) -> VolumeResult.from_numpy (cast to float32)
+    - pyvista.PolyData / similar -> MeshResult.from_pyvista
+    - anything else -> TypeError
+    """
+    import numpy as np
+    from ascribe_link.models import MeshResult, VolumeResult
+
+    if isinstance(value, (MeshResult, VolumeResult)):
+        return value
+    if isinstance(value, np.ndarray) and value.ndim == 3:
+        return VolumeResult.from_numpy(
+            np.ascontiguousarray(value.astype(np.float32))
+        )
+    try:
+        import pyvista as pv
+
+        if isinstance(value, pv.PolyData) or (
+            hasattr(value, "points") and hasattr(value, "faces")
+        ):
+            return MeshResult.from_pyvista(value)
+    except ImportError:
+        pass
+    raise TypeError(
+        f"cannot wrap agent output of type {type(value).__name__}"
+    )
