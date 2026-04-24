@@ -17,6 +17,7 @@ from litestar.exceptions import HTTPException, NotFoundException
 from litestar.response import File
 
 from ascribe_link.cache import RoomResultCache
+from ascribe_link.envelope import ENVELOPE_MEDIA_TYPE, encode_envelope
 from ascribe_link.federation import FederationHub
 from ascribe_link.job_registry import Job, JobRegistry
 from ascribe_link.models import SpecimenListItem, SpecimenMetadata, SpecimenType, result_to_dict
@@ -295,7 +296,10 @@ class SpecimenController(Controller):
             cached_result = result_cache.get(room_id, meta.function_name, params)
             if cached_result is not None:
                 logger.info("Cache hit for %s/%s", room_id, meta.function_name)
-                return cached_result
+                return Response(
+                    content=encode_envelope(cached_result),
+                    media_type=ENVELOPE_MEDIA_TYPE,
+                )
 
             # Invoke the function
             try:
@@ -304,24 +308,24 @@ class SpecimenController(Controller):
                     [],
                     params,
                 )
-                result_dict = result_to_dict(result)
             except KeyError:
                 raise NotFoundException(detail=f"Function not found: {meta.function_name}")
             except TypeError as e:
-                # Sync function - fall back to sync invoke
                 if "async" in str(e).lower() or "await" in str(e).lower():
                     result = function_registry.invoke(
                         meta.function_name,
                         [],
                         params,
                     )
-                    result_dict = result_to_dict(result)
                 else:
                     raise
 
-            # Cache and return
-            result_cache.put(room_id, meta.function_name, params, result_dict)
-            return result_dict
+            # Cache the raw result object (widened in Task 6); then envelope-serve.
+            result_cache.put(room_id, meta.function_name, params, result)
+            return Response(
+                content=encode_envelope(result),
+                media_type=ENVELOPE_MEDIA_TYPE,
+            )
 
         # Static specimen: return the file
         path = specimen_store.data_path(specimen_id)
