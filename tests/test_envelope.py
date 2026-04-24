@@ -110,3 +110,13 @@ def test_volume_round_trip_preserves_none_spacing_origin():
     decoded = decode_envelope(blob)
     assert decoded.spacing is None
     assert decoded.origin is None
+
+
+def test_from_numpy_caches_array():
+    arr = np.ones((2, 3, 4), dtype=np.float32)
+    result = VolumeResult.from_numpy(arr)
+    assert getattr(result, "_array", None) is not None
+    # Envelope encode should not need to re-decode base64
+    blob = encode_envelope(result)
+    decoded = decode_envelope(blob)
+    np.testing.assert_array_equal(decoded.to_numpy(), arr)

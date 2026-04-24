@@ -129,6 +129,11 @@ class VolumeResult:
     spacing: list[float] | None = None
     origin: list[float] | None = None
 
+    def __post_init__(self) -> None:
+        # Transient zero-copy handle; set by from_numpy, not serialized to dict
+        # and not a dataclass field (no class-level annotation with default).
+        self._array = None
+
     def to_dict(self) -> dict[str, Any]:
         d = {
             "type": self.type,
@@ -159,13 +164,16 @@ class VolumeResult:
         # Ensure C-contiguous for consistent byte order
         arr = np.ascontiguousarray(arr)
         data = base64.b64encode(arr.tobytes()).decode("ascii")
-        return cls(
+        result = cls(
             shape=list(arr.shape),
             dtype=str(arr.dtype),
             data=data,
             spacing=spacing,
             origin=origin,
         )
+        # Cache raw ndarray for zero-copy envelope encoding (avoids base64 round-trip).
+        result._array = arr
+        return result
 
 
 @dataclass
