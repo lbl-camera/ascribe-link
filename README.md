@@ -274,7 +274,7 @@ Enable AI-powered mesh generation (requires `claude-agent-sdk`):
 ```python
 app = create_app(
     enable_agent=True,
-    agent_model="claude-sonnet-4-20250514",
+    agent_model="claude-sonnet-4",
     agent_timeout=300.0
 )
 ```

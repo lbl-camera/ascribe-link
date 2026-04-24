@@ -19,7 +19,7 @@ import shutil
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Annotated
 
 from ascribe_link.progress import ProgressReporter
 from ascribe_link.sandbox import (
@@ -219,7 +219,7 @@ class AgentResult:
 async def generate_with_agent(
     prompt: str,
     file_path: str | None = None,
-    model: str = "claude-sonnet-4-20250514",
+    model: str = "claude-sonnet-4",
     timeout: float = 300.0,
     working_dir: str | None = None,
     sandbox: bool = True,
@@ -761,7 +761,7 @@ async def generate_with_agent(
 
 
 def create_agent_function(
-    model: str = "claude-sonnet-4-20250514",
+    model: str = "claude-sonnet-4",
     timeout: float = 300.0,
     sandbox: bool = True,
     sandbox_config: SandboxConfig | None = None,
@@ -786,7 +786,7 @@ def create_agent_function(
     """
 
     async def agent_generate(
-        prompt: str = r"Load the CT head volume from PNG stack at C:\Users\rp\Documents\vr-start\specimen_data\cthead-8bit\ (files named cthead-8bit001.png through the last one). Stack them into a 3D array, then extract an isosurface using marching cubes at threshold 100. Submit the resulting mesh.",
+        prompt: Annotated[str, "textarea"] = r"Load the CT head volume from PNG stack at C:\Users\rp\Documents\vr-start\specimen_data\cthead-8bit\ (files named cthead-8bit001.png through the last one). Stack them into a 3D array, then extract an isosurface using marching cubes at threshold 100. Submit the resulting mesh.",
         file_path: str = "",
         reporter: ProgressReporter | None = None,
     ) -> dict[str, Any]:
