@@ -75,7 +75,7 @@ def create_app(
 
     # Register built-in examples
     from ascribe_link.example import sphere_example
-    from ascribe_link.parametric import generate_sphere, generate_torus
+    from ascribe_link.parametric import generate_gaussian_volume, generate_sphere, generate_torus
 
     registry.register_function(sphere_example, "sphere")
 
@@ -95,6 +95,14 @@ def create_app(
         description="Torus with adjustable radii and segments",
         return_type="mesh",
         tags=["parametric", "mesh", "dynamic"],
+    )
+    registry.register_specimen(
+        generate_gaussian_volume,
+        display_name="Parametric Gaussian Volume",
+        name="generate_gaussian_volume",
+        description="3D Gaussian blob with adjustable resolution and spread",
+        return_type="volume",
+        tags=["parametric", "volume", "dynamic"],
     )
 
     # Register user-provided functions
@@ -118,7 +126,7 @@ def create_app(
                 display_name="AI Generate",
                 name="ai_generate",
                 description="Generate 3D data from natural language prompts using an AI agent",
-                return_type="mesh",  # Can also produce volumes, but mesh is default
+                return_type=None,  # Agent may return either MeshResult or VolumeResult
                 tags=["ai", "generative", "dynamic"],
             )
             
