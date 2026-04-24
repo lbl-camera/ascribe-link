@@ -20,7 +20,7 @@ from ascribe_link.cache import RoomResultCache
 from ascribe_link.envelope import ENVELOPE_MEDIA_TYPE, encode_envelope
 from ascribe_link.federation import FederationHub
 from ascribe_link.job_registry import Job, JobRegistry
-from ascribe_link.models import SpecimenListItem, SpecimenMetadata, SpecimenType, result_to_dict
+from ascribe_link.models import SpecimenListItem, SpecimenMetadata, SpecimenType
 from ascribe_link.processing import FunctionRegistry
 from ascribe_link.progress import JobReporter
 from ascribe_link.specimen_store import SpecimenStore
@@ -531,9 +531,8 @@ async def _run_job(
             job.params,
             reporter,
         )
-        result_dict = result_to_dict(result)
-        result_cache.put(job.room_id, func_name, job.params, result_dict)
-        job.result = result_dict
+        result_cache.put(job.room_id, func_name, job.params, result)
+        job.result = result
         job.status = "done"
         job.append_message(f"Finished in {time.monotonic() - t0:.2f}s")
     except asyncio.CancelledError:

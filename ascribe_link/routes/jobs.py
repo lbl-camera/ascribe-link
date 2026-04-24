@@ -9,7 +9,24 @@ from litestar.exceptions import HTTPException, NotFoundException
 
 from ascribe_link.federation import FederationHub
 from ascribe_link.job_registry import JobRegistry
-from ascribe_link.models import result_to_dict
+from ascribe_link.models import (
+    ImageResult,
+    MeshResult,
+    PointCloudResult,
+    VolumeResult,
+    result_to_dict,
+)
+
+
+def _coerce_result(value: Any) -> Any:
+    """Return a JSON-ready form of a Job.result.
+
+    Result objects are converted via ``result_to_dict``; anything else
+    (already a dict, etc.) is passed through unchanged.
+    """
+    if isinstance(value, (MeshResult, VolumeResult, PointCloudResult, ImageResult)):
+        return result_to_dict(value)
+    return value
 
 
 class JobController(Controller):
@@ -83,9 +100,7 @@ class JobController(Controller):
                 status_code=410, detail=f"Job failed: {job.error}"
             )
         # status == "done"
-        if isinstance(job.result, dict):
-            return job.result
-        return result_to_dict(job.result)
+        return _coerce_result(job.result)
 
     @delete("/{job_id:str}", status_code=204)
     async def delete_job(
