@@ -1,13 +1,14 @@
 """Tests for the binary envelope format."""
 from __future__ import annotations
 
+import json
 import struct
 
 import numpy as np
 import pytest
 
 from ascribe_link.envelope import decode_envelope, encode_envelope, ENVELOPE_MEDIA_TYPE
-from ascribe_link.models import VolumeResult
+from ascribe_link.models import MeshResult, VolumeResult
 
 
 def test_envelope_media_type():
@@ -34,9 +35,6 @@ def test_volume_round_trip_uint8():
     decoded = decode_envelope(blob)
     assert decoded.dtype == "uint8"
     np.testing.assert_array_equal(decoded.to_numpy(), arr)
-
-
-from ascribe_link.models import MeshResult
 
 
 def test_mesh_round_trip_with_normals():
@@ -88,3 +86,27 @@ def test_unknown_envelope_type():
 def test_encode_rejects_other_types():
     with pytest.raises(TypeError):
         encode_envelope({"type": "volume"})  # dict is not a Result
+
+
+def test_decode_mesh_rejects_unsupported_vertex_dtype():
+    # Build a valid mesh preamble but with a bogus vertex_dtype.
+    preamble = json.dumps({
+        "type": "mesh",
+        "vertex_count": 0, "vertex_dtype": "float64",
+        "index_count": 0,  "index_dtype": "uint32",
+        "normal_count": 0, "normal_dtype": "float32",
+    }, separators=(",", ":")).encode("utf-8")
+    blob = struct.pack("<I", len(preamble)) + preamble
+    with pytest.raises(ValueError, match="unsupported mesh vertex_dtype"):
+        decode_envelope(blob)
+
+
+def test_volume_round_trip_preserves_none_spacing_origin():
+    arr = np.zeros((2, 2, 2), dtype=np.float32)
+    original = VolumeResult.from_numpy(arr)  # spacing/origin default to None
+    assert original.spacing is None
+    assert original.origin is None
+    blob = encode_envelope(original)
+    decoded = decode_envelope(blob)
+    assert decoded.spacing is None
+    assert decoded.origin is None

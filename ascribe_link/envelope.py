@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import struct
-from typing import Union
+from typing import Any, Union
 
 import numpy as np
 
@@ -50,13 +50,15 @@ def decode_envelope(data: bytes) -> Envelopeable:
 
 def _encode_volume(result: VolumeResult) -> bytes:
     arr = _volume_array(result)
-    preamble = {
+    preamble: dict[str, Any] = {
         "type": "volume",
         "shape": list(arr.shape),
         "dtype": str(arr.dtype),
-        "spacing": list(result.spacing) if result.spacing else [1.0, 1.0, 1.0],
-        "origin": list(result.origin) if result.origin else [0.0, 0.0, 0.0],
     }
+    if result.spacing is not None:
+        preamble["spacing"] = list(result.spacing)
+    if result.origin is not None:
+        preamble["origin"] = list(result.origin)
     preamble_bytes = json.dumps(preamble, separators=(",", ":")).encode("utf-8")
     header = struct.pack("<I", len(preamble_bytes)) + preamble_bytes
     return header + np.ascontiguousarray(arr).tobytes()
@@ -113,6 +115,15 @@ def _encode_mesh(result: MeshResult) -> bytes:
 
 
 def _decode_mesh(preamble: dict, data: bytes, offset: int) -> MeshResult:
+    vertex_dtype = preamble.get("vertex_dtype", "float32")
+    index_dtype = preamble.get("index_dtype", "uint32")
+    normal_dtype = preamble.get("normal_dtype", "float32")
+    if vertex_dtype != "float32":
+        raise ValueError(f"unsupported mesh vertex_dtype: {vertex_dtype!r}")
+    if index_dtype != "uint32":
+        raise ValueError(f"unsupported mesh index_dtype: {index_dtype!r}")
+    if normal_dtype != "float32":
+        raise ValueError(f"unsupported mesh normal_dtype: {normal_dtype!r}")
     vc = preamble["vertex_count"]
     ic = preamble["index_count"]
     nc = preamble["normal_count"]
