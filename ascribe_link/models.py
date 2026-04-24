@@ -130,9 +130,12 @@ class VolumeResult:
     origin: list[float] | None = None
 
     def __post_init__(self) -> None:
-        # Transient zero-copy handle; set by from_numpy, not serialized to dict
-        # and not a dataclass field (no class-level annotation with default).
-        self._array = None
+        # Transient zero-copy handle; populated by from_numpy. Not a
+        # dataclass field (no class-level annotation), so it's excluded
+        # from to_dict / asdict / repr / eq.
+        # NOTE: it IS picked up by copy.deepcopy and pickle — strip it
+        # before pickling or caching across process boundaries.
+        self._array: np.ndarray | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d = {

@@ -120,3 +120,16 @@ def test_from_numpy_caches_array():
     blob = encode_envelope(result)
     decoded = decode_envelope(blob)
     np.testing.assert_array_equal(decoded.to_numpy(), arr)
+
+
+def test_envelope_uses_cached_array_not_base64():
+    """If _array is set, encode must not depend on result.data (base64 string).
+
+    Poisoning result.data proves the zero-copy path is the one taken.
+    """
+    arr = np.ones((2, 3, 4), dtype=np.float32)
+    result = VolumeResult.from_numpy(arr)
+    result.data = ""  # poison the base64 fallback path
+    blob = encode_envelope(result)  # must succeed via _array
+    decoded = decode_envelope(blob)
+    np.testing.assert_array_equal(decoded.to_numpy(), arr)
