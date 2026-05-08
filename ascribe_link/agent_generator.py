@@ -629,6 +629,7 @@ async def generate_with_agent(
 
     # Configure agent options
     options = ClaudeAgentOptions(
+        cli_path=os.environ.get("ASCRIBE_LINK_CLAUDE_CLI") or None,
         model=model,
         system_prompt=MESH_GENERATION_SKILL,
         cwd=working_dir,
