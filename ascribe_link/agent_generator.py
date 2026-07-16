@@ -121,6 +121,23 @@ Generate 3D meshes for Ascribe-XR.
 
 IMPORTANT: Do NOT use ToolSearch or any tool-listing commands.
 
+## Known Environment Issues (handle upfront, do not re-diagnose)
+
+This environment inherits PyCharm helper paths that inject a broken
+`sitecustomize` (it reloads numpy, corrupting it). Start EVERY Python
+script you write with this preamble — do not wait for an ImportError to
+discover it:
+
+```python
+import sys
+sys.path[:] = [p for p in sys.path if "pycharm" not in p.lower()]
+sys.modules.pop("sitecustomize", None)
+```
+
+Also known and harmless: skimage import may print a matplotlib traceback.
+It is an optional-dependency check that skimage swallows — if your script
+printed its expected output, processing succeeded. Ignore the traceback.
+
 ## How to Submit
 
 Save mesh to JSON file with FLATTENED vertices, indices, and normals:
@@ -174,7 +191,25 @@ pv.Cylinder(radius=0.5, height=2.0)
 
 Triangulates and converts to Python lists. Always use it before submitting.
 
-## submit_volume Schema (for volumetric data)
+## How to Submit a Volume (volumetric / voxel data)
+
+For ANY real-sized volume, save it to a NumPy `.npy` file and submit the file.
+Do NOT base64-encode the volume yourself, and do NOT try to pass the volume
+data inline — a real volume is far too large to fit in a tool-call argument.
+
+```python
+import numpy as np
+
+# `volume` is your 3D array, shape [depth, height, width]
+np.save("volume.npy", np.ascontiguousarray(volume))
+print(f"Saved volume {volume.shape} ({volume.dtype})")
+```
+
+Then call: `submit_volume_file(file_path="volume.npy")`
+(optionally pass `spacing=[sz, sy, sx]`).
+
+ONLY for tiny volumes (e.g. a small synthetic test) may you submit inline with
+`submit_volume` using this schema:
 
 ```json
 {
@@ -211,6 +246,87 @@ class AgentResult:
     submitted: bool = False
 
 
+def _load_volume_array(full_path: Path):
+    """Load a 3D volume array (and optional spacing) from a file on disk.
+
+    This is the file-based counterpart to inline base64 submission: the agent
+    writes the volume to disk and we read it back here, so it never has to
+    inline tens-to-hundreds of MB of base64 into a tool-call argument.
+
+    Kept module-level (like ``_emit_agent_events``) so it can be unit-tested
+    without spinning up a real SDK client.
+
+    Supported formats (by extension):
+    - ``.npy``  : NumPy-native; carries shape and dtype directly (preferred).
+    - ``.npz``  : NumPy archive; the first array is used.
+    - ``.json`` : envelope ``{"shape", "dtype", "data"(base64), "spacing"?}``
+      mirroring the inline ``submit_volume`` schema.
+
+    Returns
+    -------
+    (array, spacing)
+        ``array`` is a numpy ndarray; ``spacing`` is a list of 3 floats or None.
+
+    Raises
+    ------
+    ValueError
+        With a user-facing message if the file can't be read or is invalid.
+        ``allow_pickle=False`` is enforced so a malicious .npy/.npz can't
+        execute code inside the agent's working directory.
+    """
+    import numpy as np
+
+    suffix = full_path.suffix.lower()
+
+    if suffix == ".npy":
+        try:
+            arr = np.load(full_path, allow_pickle=False)
+        except Exception as e:
+            raise ValueError(f"could not load .npy file: {e}") from e
+        return np.asarray(arr), None
+
+    if suffix == ".npz":
+        try:
+            with np.load(full_path, allow_pickle=False) as npz:
+                keys = list(npz.files)
+                if not keys:
+                    raise ValueError(".npz file contains no arrays")
+                arr = np.asarray(npz[keys[0]])
+        except ValueError:
+            raise
+        except Exception as e:
+            raise ValueError(f"could not load .npz file: {e}") from e
+        return arr, None
+
+    if suffix == ".json":
+        import base64
+        import json
+
+        try:
+            with open(full_path, "r") as f:
+                env = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"invalid JSON: {e}") from e
+        shape = env.get("shape")
+        dtype = env.get("dtype", "float32")
+        data = env.get("data", "")
+        spacing = env.get("spacing")
+        if not shape or len(shape) != 3:
+            raise ValueError("envelope 'shape' must be [depth, height, width]")
+        if not data:
+            raise ValueError("envelope 'data' is empty")
+        try:
+            raw = base64.b64decode(data)
+            arr = np.frombuffer(raw, dtype=np.dtype(dtype)).reshape(shape)
+        except Exception as e:
+            raise ValueError(f"could not decode envelope data: {e}") from e
+        return arr, spacing
+
+    raise ValueError(
+        f"unsupported volume file type '{suffix}'. Use .npy, .npz, or .json"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Agent-based mesh generation
 # ---------------------------------------------------------------------------
@@ -219,8 +335,8 @@ class AgentResult:
 async def generate_with_agent(
     prompt: str,
     file_path: str | None = None,
-    model: str = "claude-sonnet-4-5",
-    timeout: float = 300.0,
+    model: str = "claude-opus-4-8",
+    timeout: float = 3000.0,
     working_dir: str | None = None,
     sandbox: bool = True,
     sandbox_config: SandboxConfig | None = None,
@@ -555,11 +671,94 @@ async def generate_with_agent(
             ]
         }
 
+    # Define submit_volume_file tool for real-sized volumes (avoids inlining
+    # tens-to-hundreds of MB of base64 into a tool-call argument).
+    submit_volume_file_schema = {
+        "type": "object",
+        "properties": {
+            "file_path": {
+                "type": "string",
+                "description": "Path to a volume file: .npy (preferred), .npz, or a .json envelope with shape/dtype/data(base64)",
+            },
+            "spacing": {
+                "type": "array",
+                "description": "Optional voxel spacing [sz, sy, sx]; overrides any spacing in the file",
+                "items": {"type": "number"},
+                "minItems": 3,
+                "maxItems": 3,
+            },
+        },
+        "required": ["file_path"],
+    }
+
+    @tool(
+        "submit_volume_file",
+        "Submit volumetric data from a file on disk. Use this instead of submit_volume for any real-sized volume. Preferred format is a NumPy .npy file written with np.save('volume.npy', arr); .npz and .json envelopes are also accepted.",
+        submit_volume_file_schema,
+    )
+    async def submit_volume_file(args: dict) -> dict:
+        """Load a volume from a file and submit it (no inline base64 needed)."""
+        from ascribe_link.models import VolumeResult
+
+        file_path = args.get("file_path", "")
+        if not file_path:
+            return {
+                "content": [{"type": "text", "text": "Error: file_path is required"}]
+            }
+
+        # Resolve relative to working dir; fall back to an absolute path the
+        # agent may have written elsewhere.
+        full_path = working_dir_path / file_path
+        if not full_path.exists():
+            full_path = Path(file_path)
+        if not full_path.exists():
+            return {
+                "content": [
+                    {"type": "text", "text": f"Error: file not found: {file_path}"}
+                ]
+            }
+
+        try:
+            arr, file_spacing = _load_volume_array(full_path)
+        except ValueError as e:
+            return {"content": [{"type": "text", "text": f"Error: {e}"}]}
+
+        if arr.ndim != 3:
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Error: volume must be 3D, got shape {list(arr.shape)}",
+                    }
+                ]
+            }
+
+        spacing = args.get("spacing") or file_spacing
+        # from_numpy handles C-contiguity and base64 encoding server-side.
+        vr = VolumeResult.from_numpy(arr, spacing=spacing)
+
+        result.result_type = "volume"
+        result.volume_shape = vr.shape
+        result.volume_dtype = vr.dtype
+        result.volume_data = vr.data
+        result.volume_spacing = spacing
+        result.submitted = True
+
+        total_voxels = int(arr.shape[0] * arr.shape[1] * arr.shape[2])
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"Volume submitted from file: {vr.shape} ({total_voxels:,} voxels, {vr.dtype})",
+                }
+            ]
+        }
+
     # Create MCP server with our tools
     mesh_server = create_sdk_mcp_server(
         name="mesh-tools",
         version="1.0.0",
-        tools=[submit_mesh, submit_mesh_file, submit_volume],
+        tools=[submit_mesh, submit_mesh_file, submit_volume, submit_volume_file],
     )
 
     # Set up working directory
@@ -627,9 +826,23 @@ async def generate_with_agent(
         ]
         logger.info("Sandbox enabled for Bash commands (Firejail)")
 
+    # Strip PyCharm helper paths from PYTHONPATH so the agent's Python
+    # never imports PyCharm's sitecustomize (it reloads numpy, corrupting it).
+    agent_env = {}
+    pythonpath = os.environ.get("PYTHONPATH", "")
+    if pythonpath:
+        cleaned = os.pathsep.join(
+            p for p in pythonpath.split(os.pathsep)
+            if p and "pycharm" not in p.lower()
+        )
+        if cleaned != pythonpath:
+            agent_env["PYTHONPATH"] = cleaned
+            logger.info("Removed PyCharm helper paths from agent PYTHONPATH")
+
     # Configure agent options
     options = ClaudeAgentOptions(
         cli_path=os.environ.get("ASCRIBE_LINK_CLAUDE_CLI") or None,
+        env=agent_env,
         model=model,
         system_prompt=MESH_GENERATION_SKILL,
         cwd=working_dir,
@@ -641,6 +854,7 @@ async def generate_with_agent(
             "mcp__mesh__submit_mesh",
             "mcp__mesh__submit_mesh_file",
             "mcp__mesh__submit_volume",
+            "mcp__mesh__submit_volume_file",
         ],
         disallowed_tools=[
             "ToolSearch",  # Schema is already in the prompt
@@ -762,8 +976,8 @@ async def generate_with_agent(
 
 
 def create_agent_function(
-    model: str = "claude-sonnet-4-5",
-    timeout: float = 300.0,
+    model: str = "claude-opus-4-8",
+    timeout: float = 3000.0,
     sandbox: bool = True,
     sandbox_config: SandboxConfig | None = None,
 ):
@@ -787,7 +1001,7 @@ def create_agent_function(
     """
 
     async def agent_generate(
-        prompt: Annotated[str, "textarea"] = r"Load the CT head volume from PNG stack at C:\Users\rp\Documents\vr-start\specimen_data\cthead-8bit\ (files named cthead-8bit001.png through the last one). Stack them into a 3D array, then extract an isosurface using marching cubes at threshold 100. Submit the resulting mesh.",
+        prompt: Annotated[str, "textarea"] = r"Read the tif stacks at ~/Downloads/5dry.tif and ~/Downloads/60dry.tif and slice out a cube of equal length/width/height from the center. Subtract the 10th percentile from each; that will be the 'raw' data. Perform threshold using Yen method from skimage, assuming the background is dark. Then use skimage.regionprops to filter out objects smaller than 500 voxels. Use that result to mask the original 'cube' data. Return a 2x2 stack of the raw and masked data with a small gap between each. Each dataset should be processed individually.",
         file_path: str = "",
         reporter: ProgressReporter | None = None,
     ) -> dict[str, Any]:
