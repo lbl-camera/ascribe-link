@@ -8,6 +8,7 @@ from litestar import Controller, get, delete
 from litestar.exceptions import HTTPException, NotFoundException
 
 from ascribe_link.federation import FederationHub
+from ascribe_link.gen_timing import gt_mark
 from ascribe_link.job_registry import JobRegistry
 from ascribe_link.models import (
     ImageResult,
@@ -100,7 +101,14 @@ class JobController(Controller):
                 status_code=410, detail=f"Job failed: {job.error}"
             )
         # status == "done"
-        return _coerce_result(job.result)
+        gt_mark("/result: request received, coercing result")
+        _t0 = time.perf_counter()
+        payload = _coerce_result(job.result)
+        gt_mark(
+            f"/result: coerced to JSON-ready dict "
+            f"({time.perf_counter() - _t0:.3f}s), sending"
+        )
+        return payload
 
     @delete("/{job_id:str}", status_code=204)
     async def delete_job(

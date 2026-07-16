@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Annotated
 
+from ascribe_link.gen_timing import gt_mark
 from ascribe_link.progress import ProgressReporter
 from ascribe_link.sandbox import (
     SandboxConfig,
@@ -426,6 +427,7 @@ async def generate_with_agent(
     )
     async def submit_mesh(args: dict) -> dict:
         """Capture the mesh submitted by the agent."""
+        gt_mark("submit_mesh: tool entry")
         vertices = args.get("vertices", [])
         indices = args.get("indices", [])
 
@@ -486,6 +488,7 @@ async def generate_with_agent(
         result.vertices = vertices
         result.indices = indices
         result.submitted = True
+        gt_mark("submit_mesh: tool done")
 
         return {
             "content": [
@@ -515,6 +518,7 @@ async def generate_with_agent(
     )
     async def submit_mesh_file(args: dict) -> dict:
         """Load mesh from JSON file and submit it."""
+        gt_mark("submit_mesh_file: tool entry")
         import json
         import math
 
@@ -568,6 +572,7 @@ async def generate_with_agent(
         result.indices = indices
         result.normals = normals
         result.submitted = True
+        gt_mark("submit_mesh_file: tool done")
 
         normals_info = f", {len(normals)} normals" if normals else ""
         return {
@@ -616,6 +621,7 @@ async def generate_with_agent(
     )
     async def submit_volume(args: dict) -> dict:
         """Capture the volume submitted by the agent."""
+        gt_mark("submit_volume: tool entry")
         shape = args.get("shape", [])
         dtype = args.get("dtype", "float32")
         data = args.get("data", "")
@@ -660,6 +666,7 @@ async def generate_with_agent(
         result.volume_data = data
         result.volume_spacing = spacing
         result.submitted = True
+        gt_mark("submit_volume: tool done")
 
         total_voxels = shape[0] * shape[1] * shape[2]
         return {
@@ -698,6 +705,7 @@ async def generate_with_agent(
     )
     async def submit_volume_file(args: dict) -> dict:
         """Load a volume from a file and submit it (no inline base64 needed)."""
+        gt_mark("submit_volume_file: tool entry")
         from ascribe_link.models import VolumeResult
 
         file_path = args.get("file_path", "")
@@ -743,6 +751,7 @@ async def generate_with_agent(
         result.volume_data = vr.data
         result.volume_spacing = spacing
         result.submitted = True
+        gt_mark("submit_volume_file: tool done")
 
         total_voxels = int(arr.shape[0] * arr.shape[1] * arr.shape[2])
         return {
@@ -865,12 +874,15 @@ async def generate_with_agent(
     )
 
     logger.info("Starting generation agent: %s", prompt[:100])
+    gt_mark("agent: starting (spawning Claude CLI)")
 
     try:
         async with ClaudeSDKClient(options=options) as client:
             logger.info("ClaudeSDKClient connected, sending query...")
+            gt_mark("agent: SDK client connected")
             await client.query(user_prompt)
             logger.info("Query sent, waiting for responses...")
+            gt_mark("agent: query sent")
 
             # Process responses with timeout
             async def process_responses():
@@ -878,6 +890,8 @@ async def generate_with_agent(
                 async for msg in client.receive_response():
                     msg_count += 1
                     msg_type = type(msg).__name__
+                    if msg_count == 1:
+                        gt_mark("agent: first SDK message received")
                     logger.info("Received message #%d: %s", msg_count, msg_type)
                     try:
                         _emit_agent_events(msg, reporter)
@@ -914,6 +928,7 @@ async def generate_with_agent(
                             else "Result submitted"
                         )
                         logger.info("Result submitted, exiting response loop")
+                        gt_mark("agent: submission observed, exiting response loop")
                         return
 
                 logger.warning(

@@ -19,6 +19,7 @@ from litestar.response import File
 from ascribe_link.cache import RoomResultCache
 from ascribe_link.envelope import ENVELOPE_MEDIA_TYPE, encode_envelope
 from ascribe_link.federation import FederationHub
+from ascribe_link.gen_timing import gt_mark, gt_reset
 from ascribe_link.job_registry import Job, JobRegistry
 from ascribe_link.models import SpecimenListItem, SpecimenMetadata, SpecimenType
 from ascribe_link.processing import FunctionRegistry
@@ -296,8 +297,15 @@ class SpecimenController(Controller):
             cached_result = result_cache.get(room_id, meta.function_name, params)
             if cached_result is not None:
                 logger.info("Cache hit for %s/%s", room_id, meta.function_name)
+                gt_mark(f"/data: cache hit, encoding envelope ({specimen_id})")
+                _enc_t0 = time.perf_counter()
+                _payload = encode_envelope(cached_result)
+                gt_mark(
+                    f"/data: envelope encoded ({len(_payload)} bytes, "
+                    f"{time.perf_counter() - _enc_t0:.3f}s encode), sending"
+                )
                 return Response(
-                    content=encode_envelope(cached_result),
+                    content=_payload,
                     media_type=ENVELOPE_MEDIA_TYPE,
                 )
 
@@ -442,6 +450,8 @@ class SpecimenController(Controller):
         data = data or {}
         params: dict[str, Any] = data.get("params", {}) or {}
         room_id: str = data.get("room_id", "ascribe")
+        gt_reset()
+        gt_mark(f"start_job: prompt received ({specimen_id})")
 
         # Resolve the specimen and ensure it's dynamic.
         if ":" in specimen_id and federation_hub:
@@ -494,6 +504,7 @@ class SpecimenController(Controller):
                 func_name=meta.function_name,
             )
         )
+        gt_mark("start_job: job task spawned, responding to client")
         return {"job_id": job.id, "status": "running"}
 
     @get("/reload")
@@ -533,6 +544,7 @@ async def _run_job(
     reporter = JobReporter(job)
     job.append_message(f"Starting {job.specimen_id}")
     t0 = time.monotonic()
+    gt_mark("_run_job: offloading to worker thread")
     try:
         result = await asyncio.to_thread(
             _invoke_in_thread,
@@ -541,9 +553,11 @@ async def _run_job(
             job.params,
             reporter,
         )
+        gt_mark("_run_job: agent function returned")
         result_cache.put(job.room_id, func_name, job.params, result)
         job.result = result
         job.status = "done"
+        gt_mark("_run_job: job marked done (cached, pollable)")
         job.append_message(f"Finished in {time.monotonic() - t0:.2f}s")
     except asyncio.CancelledError:
         job.status = "error"
