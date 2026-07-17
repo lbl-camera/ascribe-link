@@ -859,6 +859,7 @@ async def generate_with_agent(
         allowed_tools=[
             "Read",
             "Write",
+            "Edit",
             "Bash",
             "mcp__mesh__submit_mesh",
             "mcp__mesh__submit_mesh_file",
@@ -869,6 +870,9 @@ async def generate_with_agent(
             "ToolSearch",  # Schema is already in the prompt
         ],
         permission_mode="acceptEdits",
+        # acceptEdits only auto-approves edits under cwd; include the repo so
+        # the agent can modify its own source without a permission prompt.
+        add_dirs=[str(Path(__file__).resolve().parent.parent)],
         max_turns=25,  # Encourage efficiency
         hooks=hooks if hooks else None,
     )
@@ -1016,7 +1020,8 @@ def create_agent_function(
     """
 
     async def agent_generate(
-        prompt: Annotated[str, "textarea"] = r"Read the tif stacks at ~/Downloads/5dry.tif and ~/Downloads/60dry.tif and slice out a cube of equal length/width/height from the center. Subtract the 10th percentile from each; that will be the 'raw' data. Perform threshold using Yen method from skimage, assuming the background is dark. Then use skimage.regionprops to filter out objects smaller than 500 voxels. Use that result to mask the original 'cube' data. Return a 2x2 stack of the raw and masked data with a small gap between each. Each dataset should be processed individually.",
+        prompt: Annotated[str, "textarea"] = r"Read the tif stacks at ~/Downloads/5dry.tif and ~/Downloads/60dry.tif and slice out a cube of equal length/width/height from the center. Subtract the 10th percentile from each; that will be the 'raw' data. Perform threshold using Yen method from skimage, assuming the background is dark. Then use skimage.regionprops to filter out objects smaller than 500 voxels. Use that result to mask the original 'cube' data. Return a 2x2 stack of the raw and masked data with a small gap between each. Each dataset should be processed individually."
+                                             r"Note, this is a dry run. Afterwards, any issues you encounter should be investigated, and the system prompt in agent_generator.py (C:\Users\rp\PycharmProjects\ascribe-link\ascribe_link\agent_generator.py) should be modified to reduce friction in future runs. Do not actually submit the result until you've updated the system prompt.",
         file_path: str = "",
         reporter: ProgressReporter | None = None,
     ) -> dict[str, Any]:
