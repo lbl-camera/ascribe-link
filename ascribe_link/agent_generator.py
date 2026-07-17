@@ -16,6 +16,7 @@ import asyncio
 import logging
 import os
 import shutil
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -124,16 +125,33 @@ IMPORTANT: Do NOT use ToolSearch or any tool-listing commands.
 
 ## Known Environment Issues (handle upfront, do not re-diagnose)
 
-This environment inherits PyCharm helper paths that inject a broken
-`sitecustomize` (it reloads numpy, corrupting it). Start EVERY Python
-script you write with this preamble — do not wait for an ImportError to
-discover it:
+Use the project virtual-env interpreter for ALL Python you run — it has
+numpy, tifffile, scikit-image, pyvista and ascribe_link installed:
 
-```python
-import sys
-sys.path[:] = [p for p in sys.path if "pycharm" not in p.lower()]
-sys.modules.pop("sitecustomize", None)
 ```
+{PYTHON_EXE}
+```
+
+DO NOT strip "pycharm" from sys.path, and DO NOT add the old
+`sys.path[:] = [p for p in sys.path if "pycharm" not in p.lower()]` preamble.
+The project (and therefore its venv site-packages) may live under a path
+containing "pycharm" (e.g. a PycharmProjects directory), so filtering out
+"pycharm" DELETES the real site-packages and causes
+`ModuleNotFoundError: numpy` (and tifffile, skimage).
+With the venv interpreter, `PYTHONPATH` is empty and there is no injected
+`sitecustomize`, so NO sys.path surgery is needed — just import normally.
+(If, and only if, you ever hit a genuinely corrupted-numpy error, the safe
+fix is `sys.modules.pop("sitecustomize", None)` alone — never touch sys.path.)
+
+Shell/filesystem gotchas that will otherwise cost you a run:
+- Each Bash tool call starts in a FRESH temp cwd (it resets between calls).
+  Use absolute paths, or `cd` to your working dir inside the same command.
+- Never name a script after a stdlib module (e.g. `inspect.py`, `code.py`,
+  `types.py`) and never run a script from a dir containing such a file —
+  it shadows the stdlib and breaks numpy's internal `import inspect`.
+  Put your scripts in a dedicated work dir (e.g. `~/ascribe_work`).
+- Large TIFF stacks (~1 GB) do NOT need to be fully loaded. Read only the
+  pages you need, e.g. `tif.asarray(key=range(z0, z0 + d))`, then crop in XY.
 
 Also known and harmless: skimage import may print a matplotlib traceback.
 It is an optional-dependency check that skimage swallows — if your script
@@ -853,7 +871,10 @@ async def generate_with_agent(
         cli_path=os.environ.get("ASCRIBE_LINK_CLAUDE_CLI") or None,
         env=agent_env,
         model=model,
-        system_prompt=MESH_GENERATION_SKILL,
+        # The app itself runs from the project venv, so sys.executable is the
+        # interpreter the agent must use (str.replace, not .format — the
+        # skill text is full of literal braces in code/JSON examples).
+        system_prompt=MESH_GENERATION_SKILL.replace("{PYTHON_EXE}", sys.executable),
         cwd=working_dir,
         mcp_servers={"mesh": mesh_server},
         allowed_tools=[
