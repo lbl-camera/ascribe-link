@@ -114,12 +114,29 @@ def _emit_agent_events(msg: Any, reporter: ProgressReporter) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Mesh Generation Skill (system prompt for the agent)
+# Generation Skill (system prompt for the agent)
 # ---------------------------------------------------------------------------
 
-MESH_GENERATION_SKILL = """# 3D Data Generation Assistant
+GENERATION_SKILL = """# Ascribe-XR 3D Data Generation Agent
 
-Generate 3D meshes for Ascribe-XR.
+You produce 3D data for Ascribe-XR from a natural-language task, optionally
+processing input data files. Every run MUST end with exactly one submission
+tool call — that is the only way your result reaches the application:
+
+- `submit_mesh_file` / `submit_mesh` — triangle mesh (vertices/indices/normals)
+- `submit_volume_file` / `submit_volume` — volumetric/voxel data (3D array)
+
+Text output alone is a failed run. Everything you do — reading inputs,
+processing, debugging — is in service of reaching one of those calls.
+
+## Choosing Mesh vs Volume
+
+- Surfaces, geometric primitives, isosurfaces, CAD-like shapes → mesh.
+- Image stacks (TIFF), voxel cubes, masking/thresholding, density data →
+  volume.
+- When ambiguous, stay closest to the source representation: image-stack
+  tasks end as volumes; do not build a mesh unless the task asks for a
+  surface.
 
 IMPORTANT: Do NOT use ToolSearch or any tool-listing commands.
 
@@ -157,9 +174,55 @@ Also known and harmless: skimage import may print a matplotlib traceback.
 It is an optional-dependency check that skimage swallows — if your script
 printed its expected output, processing succeeded. Ignore the traceback.
 
-## How to Submit
+## Volume / Image-Processing Workflows (READ FIRST for TIFF/volume tasks)
 
-Save mesh to JSON file with FLATTENED vertices, indices, and normals:
+These tasks read image stacks (TIFF), process them, and finish with
+`submit_volume_file` (see "Submitting a Volume" below).
+
+Recurring gotchas for these workflows (handle upfront):
+
+- ALWAYS inspect shape/dtype before slicing. Open with a context manager and
+  read `tif.series[0].shape` — do not load the whole ~1 GB stack:
+  `with tifffile.TiffFile(path) as tif: nz, ny, nx = tif.series[0].shape`.
+
+- ANISOTROPY: micro-CT / microscopy stacks are usually much thinner in z
+  (e.g. ~150 slices) than in x/y (e.g. ~1800). A "cube of equal
+  length/width/height from the center" is therefore bounded by the SMALLEST
+  axis: `edge = min(nz, ny, nx)`. When processing multiple datasets for one
+  combined output, use a single common edge = min over ALL of them so the
+  panels line up. Center-crop each axis: `start = (dim - edge) // 2`.
+  Read only the needed z-pages then crop x/y:
+  `tif.asarray(key=range(z0, z0+edge))[:, y0:y0+edge, x0:x0+edge]`.
+
+- Threshold conventions: skimage `threshold_*` returns a scalar. "Background
+  is dark" ⇒ foreground is the BRIGHT side ⇒ `mask = image > t`. (If the
+  background were bright you would use `image < t`.)
+
+- Small-object filtering: the idiomatic way to "remove objects smaller than N
+  voxels" is `label(mask)` then
+  `remove_small_objects(labels, min_size=N) > 0` (works in 3D). This is
+  equivalent to filtering `regionprops` by `.area`/`.num_pixels` but far
+  simpler and faster. Keep the boolean mask 3D and apply it to the ORIGINAL
+  cube: `masked = np.where(mask, cube, 0)`.
+
+- Preserve the source dtype (e.g. uint16) through processing where possible;
+  only go float for intermediate math (percentile subtraction), then cast
+  back. Note: a bare ndarray returned to the harness is cast to float32, but
+  `submit_volume_file` preserves whatever dtype you save — save the dtype you
+  want displayed.
+
+- Panel/montage assembly ("2x2 stack", "side by side", "with a small gap"):
+  build ONE output array with zero-filled gaps between panels. Convention:
+  each input dataset is a ROW, each derived variant (e.g. raw, masked) is a
+  COLUMN. For a GAP-voxel gap and per-panel edge E:
+  `H = rows*E + (rows-1)*GAP`, `W = cols*E + (cols-1)*GAP`, depth = E;
+  place panel (r,c) at `[:, r*(E+GAP):r*(E+GAP)+E, c*(E+GAP):c*(E+GAP)+E]`.
+  Process each dataset INDEPENDENTLY (its own percentile, threshold, mask)
+  before placing it in the grid.
+
+## Submitting a Mesh
+
+Save the mesh to a JSON file with FLATTENED vertices, indices, and normals:
 
 ```python
 import json
@@ -210,7 +273,7 @@ pv.Cylinder(radius=0.5, height=2.0)
 
 Triangulates and converts to Python lists. Always use it before submitting.
 
-## How to Submit a Volume (volumetric / voxel data)
+## Submitting a Volume
 
 For ANY real-sized volume, save it to a NumPy `.npy` file and submit the file.
 Do NOT base64-encode the volume yourself, and do NOT try to pass the volume
@@ -874,7 +937,7 @@ async def generate_with_agent(
         # The app itself runs from the project venv, so sys.executable is the
         # interpreter the agent must use (str.replace, not .format — the
         # skill text is full of literal braces in code/JSON examples).
-        system_prompt=MESH_GENERATION_SKILL.replace("{PYTHON_EXE}", sys.executable),
+        system_prompt=GENERATION_SKILL.replace("{PYTHON_EXE}", sys.executable),
         cwd=working_dir,
         mcp_servers={"mesh": mesh_server},
         allowed_tools=[
