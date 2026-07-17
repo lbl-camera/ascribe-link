@@ -167,12 +167,17 @@ Shell/filesystem gotchas that will otherwise cost you a run:
   `types.py`) and never run a script from a dir containing such a file —
   it shadows the stdlib and breaks numpy's internal `import inspect`.
   Put your scripts in a dedicated work dir (e.g. `~/ascribe_work`).
-- Large TIFF stacks (~1 GB) do NOT need to be fully loaded. Read only the
+- Large TIFF stacks (can be multi-GB) do NOT need to be fully loaded. Read only the
   pages you need, e.g. `tif.asarray(key=range(z0, z0 + d))`, then crop in XY.
 
 Also known and harmless: skimage import may print a matplotlib traceback.
 It is an optional-dependency check that skimage swallows — if your script
 printed its expected output, processing succeeded. Ignore the traceback.
+Likewise, skimage `threshold_yen` (and other entropy-based thresholds) can
+print `RuntimeWarning: divide by zero encountered in log` on volumes with
+sparse/empty histogram bins — the threshold value is still valid. Do NOT
+re-diagnose it; if a scalar threshold was returned, just use it. Suppress it
+if desired with `np.errstate(divide="ignore", invalid="ignore")`.
 
 ## Volume / Image-Processing Workflows (READ FIRST for TIFF/volume tasks)
 
@@ -182,43 +187,43 @@ These tasks read image stacks (TIFF), process them, and finish with
 Recurring gotchas for these workflows (handle upfront):
 
 - ALWAYS inspect shape/dtype before slicing. Open with a context manager and
-  read `tif.series[0].shape` — do not load the whole ~1 GB stack:
+  read `tif.series[0].shape` — do not load the whole stack just to learn it:
   `with tifffile.TiffFile(path) as tif: nz, ny, nx = tif.series[0].shape`.
 
-- ANISOTROPY: micro-CT / microscopy stacks are usually much thinner in z
-  (e.g. ~150 slices) than in x/y (e.g. ~1800). A "cube of equal
-  length/width/height from the center" is therefore bounded by the SMALLEST
-  axis: `edge = min(nz, ny, nx)`. When processing multiple datasets for one
-  combined output, use a single common edge = min over ALL of them so the
-  panels line up. Center-crop each axis: `start = (dim - edge) // 2`.
-  Read only the needed z-pages then crop x/y:
+- ANISOTROPY: micro-CT / microscopy stacks often have far fewer z slices
+  than x/y pixels. If a task asks for a cube (equal extent per axis), the
+  cube is bounded by the SMALLEST axis: `edge = min(nz, ny, nx)`; if
+  multiple datasets feed one combined output, use a common size (min over
+  all of them). Center-crop with `start = (dim - edge) // 2`, reading only
+  the needed z-pages then cropping x/y:
   `tif.asarray(key=range(z0, z0+edge))[:, y0:y0+edge, x0:x0+edge]`.
 
-- Threshold conventions: skimage `threshold_*` returns a scalar. "Background
-  is dark" ⇒ foreground is the BRIGHT side ⇒ `mask = image > t`. (If the
-  background were bright you would use `image < t`.)
+- Threshold conventions: skimage `threshold_*` returns a scalar. If the
+  background is dark, foreground is the BRIGHT side ⇒ `mask = image > t`;
+  if the background is bright, `mask = image < t`.
 
-- Small-object filtering: the idiomatic way to "remove objects smaller than N
-  voxels" is `label(mask)` then
-  `remove_small_objects(labels, min_size=N) > 0` (works in 3D). This is
-  equivalent to filtering `regionprops` by `.area`/`.num_pixels` but far
-  simpler and faster. Keep the boolean mask 3D and apply it to the ORIGINAL
-  cube: `masked = np.where(mask, cube, 0)`.
+- Small-object filtering ("remove objects smaller than N voxels"):
+  `label(mask)` then `remove_small_objects(labels, min_size=N) > 0` (works
+  in 3D) is equivalent to filtering `regionprops` by `.area`/`.num_pixels`
+  and simpler — either satisfies a task that names `regionprops`, since the
+  resulting mask is identical. Keep the boolean mask 3D and apply it to the
+  ORIGINAL data: `masked = np.where(mask, data, 0)`.
 
 - Preserve the source dtype (e.g. uint16) through processing where possible;
-  only go float for intermediate math (percentile subtraction), then cast
-  back. Note: a bare ndarray returned to the harness is cast to float32, but
-  `submit_volume_file` preserves whatever dtype you save — save the dtype you
-  want displayed.
+  only go float for intermediate math, then cast back. Note: a bare ndarray
+  returned to the harness is cast to float32, but `submit_volume_file`
+  preserves whatever dtype you save — save the dtype you want displayed.
 
-- Panel/montage assembly ("2x2 stack", "side by side", "with a small gap"):
-  build ONE output array with zero-filled gaps between panels. Convention:
-  each input dataset is a ROW, each derived variant (e.g. raw, masked) is a
-  COLUMN. For a GAP-voxel gap and per-panel edge E:
+- Multi-panel assembly (a task asking for several results combined "side by
+  side", stacked, or in a grid): build ONE output array, with zero-filled
+  gaps between panels if separation is wanted. Derive the layout from the
+  task; if it doesn't specify one, a reasonable default is one row per input
+  dataset and one column per derived variant (e.g. raw, masked). For a
+  GAP-voxel gap and per-panel edge E:
   `H = rows*E + (rows-1)*GAP`, `W = cols*E + (cols-1)*GAP`, depth = E;
   place panel (r,c) at `[:, r*(E+GAP):r*(E+GAP)+E, c*(E+GAP):c*(E+GAP)+E]`.
-  Process each dataset INDEPENDENTLY (its own percentile, threshold, mask)
-  before placing it in the grid.
+  Process each dataset INDEPENDENTLY (its own threshold/mask) before placing
+  it in the grid.
 
 ## Submitting a Mesh
 
