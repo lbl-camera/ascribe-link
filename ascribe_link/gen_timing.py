@@ -2,8 +2,7 @@
 
 Single-run, order-of-magnitude instrumentation: gt_reset() is called when a
 new job is submitted, then gt_mark() prints elapsed time since reset and
-since the previous mark. Output goes to both the logger and stdout so it is
-visible regardless of logging config. Grep for [GENTIMING].
+since the previous mark. Output goes to the logger. Grep for [GENTIMING].
 """
 from __future__ import annotations
 
@@ -29,6 +28,8 @@ def gt_mark(label: str) -> None:
         _t0 = now
         _last = now
     line = "[GENTIMING] %-48s t=%9.3fs (+%.3fs)" % (label, now - _t0, now - _last)
-    print(line, flush=True)
+    # Logger only — a direct print() blocks the calling thread (and with it
+    # the event loop) whenever the Windows console is paused, e.g. during
+    # quick-edit text selection. The CLI routes logging through a queue.
     logger.info(line)
     _last = now

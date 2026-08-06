@@ -80,6 +80,7 @@ def main() -> None:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    _make_logging_nonblocking()
 
     if args.worker:
         # Worker mode: connect to a relay
@@ -87,6 +88,33 @@ def main() -> None:
     else:
         # Standalone or relay mode
         run_server_mode(args)
+
+
+def _make_logging_nonblocking() -> None:
+    """Route all root-logger output through a background writer thread.
+
+    A synchronous console write on Windows blocks the writing thread for as
+    long as the console is paused (quick-edit text selection, scroll lock,
+    slow rendering). With uvicorn + our loggers writing from the event loop,
+    that froze the loop for up to a minute and made ASCRIBE-XR's polls fail
+    with HTTP 0. A QueueHandler makes log emission non-blocking; only the
+    listener thread ever waits on the console.
+    """
+    import atexit
+    import queue
+    from logging.handlers import QueueHandler, QueueListener
+
+    root = logging.getLogger()
+    handlers = root.handlers[:]
+    if not handlers or any(isinstance(h, QueueHandler) for h in handlers):
+        return
+    q: queue.SimpleQueue = queue.SimpleQueue()
+    for h in handlers:
+        root.removeHandler(h)
+    root.addHandler(QueueHandler(q))
+    listener = QueueListener(q, *handlers, respect_handler_level=True)
+    listener.start()
+    atexit.register(listener.stop)
 
 
 def run_server_mode(args: argparse.Namespace) -> None:
@@ -113,7 +141,12 @@ def run_server_mode(args: argparse.Namespace) -> None:
         agent_model=args.agent_model,
         agent_timeout=args.agent_timeout,
     )
-    uvicorn.run(app, host=args.host, port=args.port, reload=args.reload)
+    # log_config=None: don't let uvicorn install its own synchronous console
+    # handlers — its loggers then propagate to the root logger, whose output
+    # goes through the non-blocking queue (see _make_logging_nonblocking).
+    uvicorn.run(
+        app, host=args.host, port=args.port, reload=args.reload, log_config=None
+    )
 
 
 def run_worker_mode(args: argparse.Namespace) -> None:
