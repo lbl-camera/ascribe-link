@@ -1,4 +1,4 @@
-"""Litestar application factory."""
+﻿"""Litestar application factory."""
 
 from __future__ import annotations
 
@@ -27,6 +27,34 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
+
+
+async def _run_loop_lag_watchdog(
+    interval: float = 0.5, threshold: float = 0.25
+) -> None:
+    """Log a warning whenever the main event loop stalls.
+
+    Sleeps `interval` seconds in a loop and measures how late it wakes up.
+    A wake-up more than `threshold` seconds late means something held the
+    loop (or the GIL) for that long — anything polling the HTTP API during
+    that window got no response. Diagnostic for the ASCRIBE-XR
+    "GET /progress ... HTTP 0" errors seen during agent runs.
+    """
+    import time
+
+    from ascribe_link.gen_timing import gt_mark
+
+    while True:
+        start = time.monotonic()
+        await asyncio.sleep(interval)
+        lag = time.monotonic() - start - interval
+        if lag > threshold:
+            logger.warning(
+                "Event loop stalled for %.2fs — HTTP requests (including "
+                "/progress polls) were blocked during this window",
+                lag,
+            )
+            gt_mark(f"loop watchdog: main event loop stalled {lag:.2f}s")
 
 
 def _default_specimens_dir() -> Path:
@@ -191,22 +219,25 @@ def create_app(
             status_code=500,
         )
 
-    # --- Lifecycle hooks for the job TTL sweeper ---
-    sweeper_task_holder: dict[str, asyncio.Task] = {}
+    # --- Lifecycle hooks for background tasks (job TTL sweeper, watchdog) ---
+    background_tasks: dict[str, asyncio.Task] = {}
 
-    async def _start_sweeper(app_: Litestar) -> None:
-        sweeper_task_holder["task"] = asyncio.create_task(
+    async def _start_background_tasks(app_: Litestar) -> None:
+        background_tasks["sweeper"] = asyncio.create_task(
             job_registry.run_sweeper(interval=30.0)
         )
+        background_tasks["loop_watchdog"] = asyncio.create_task(
+            _run_loop_lag_watchdog()
+        )
 
-    async def _stop_sweeper(app_: Litestar) -> None:
-        task = sweeper_task_holder.get("task")
-        if task and not task.done():
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+    async def _stop_background_tasks(app_: Litestar) -> None:
+        for task in background_tasks.values():
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
 
     app = Litestar(
         route_handlers=route_handlers,
@@ -227,8 +258,8 @@ def create_app(
             render_plugins=[SwaggerRenderPlugin()],
             path="/docs",
         ),
-        on_startup=[_start_sweeper],
-        on_shutdown=[_stop_sweeper],
+        on_startup=[_start_background_tasks],
+        on_shutdown=[_stop_background_tasks],
     )
 
     return app
