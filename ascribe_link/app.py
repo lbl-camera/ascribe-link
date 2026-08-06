@@ -39,10 +39,23 @@ async def _run_loop_lag_watchdog(
     loop (or the GIL) for that long — anything polling the HTTP API during
     that window got no response. Diagnostic for the ASCRIBE-XR
     "GET /progress ... HTTP 0" errors seen during agent runs.
+
+    Also enables asyncio debug slow-callback reporting so that when the
+    stall is caused by a specific callback/coroutine step blocking the
+    loop, the asyncio logger names it ("Executing <Task ...> took X.XXXs").
+    A stall reported here WITHOUT a matching thread-watchdog stall and
+    WITH an asyncio slow-callback line = loop blocked by that callback.
+    A stall reported by BOTH watchdogs = process-wide (GIL held, long GC
+    pause, or CPU starvation from other processes).
     """
     import time
 
     from ascribe_link.gen_timing import gt_mark
+
+    loop = asyncio.get_running_loop()
+    loop.slow_callback_duration = threshold
+    loop.set_debug(True)
+    logging.getLogger("asyncio").setLevel(logging.WARNING)
 
     while True:
         start = time.monotonic()
@@ -55,6 +68,34 @@ async def _run_loop_lag_watchdog(
                 lag,
             )
             gt_mark(f"loop watchdog: main event loop stalled {lag:.2f}s")
+
+
+def _run_thread_lag_watchdog(
+    stop_event, interval: float = 0.5, threshold: float = 0.25
+) -> None:
+    """Plain-OS-thread twin of the loop watchdog (run as a daemon thread).
+
+    Doesn't touch asyncio, so it only stalls when the whole process is
+    starved: GIL held by a long C call, a long GC pause, or the OS not
+    scheduling this process (e.g. every core saturated by heavy compute).
+    Comparing its reports with the loop watchdog's separates "the event
+    loop is blocked by a coroutine" from "the process itself is starved".
+    """
+    import time
+
+    from ascribe_link.gen_timing import gt_mark
+
+    while not stop_event.is_set():
+        start = time.monotonic()
+        stop_event.wait(interval)
+        lag = time.monotonic() - start - interval
+        if lag > threshold:
+            logger.warning(
+                "Process-wide stall of %.2fs (plain thread also starved — "
+                "GIL/GC/CPU contention, not an event-loop block)",
+                lag,
+            )
+            gt_mark(f"thread watchdog: process-wide stall {lag:.2f}s")
 
 
 def _default_specimens_dir() -> Path:
@@ -222,6 +263,10 @@ def create_app(
     # --- Lifecycle hooks for background tasks (job TTL sweeper, watchdog) ---
     background_tasks: dict[str, asyncio.Task] = {}
 
+    import threading
+
+    watchdog_stop = threading.Event()
+
     async def _start_background_tasks(app_: Litestar) -> None:
         background_tasks["sweeper"] = asyncio.create_task(
             job_registry.run_sweeper(interval=30.0)
@@ -229,8 +274,15 @@ def create_app(
         background_tasks["loop_watchdog"] = asyncio.create_task(
             _run_loop_lag_watchdog()
         )
+        threading.Thread(
+            target=_run_thread_lag_watchdog,
+            args=(watchdog_stop,),
+            name="thread-lag-watchdog",
+            daemon=True,
+        ).start()
 
     async def _stop_background_tasks(app_: Litestar) -> None:
+        watchdog_stop.set()
         for task in background_tasks.values():
             if task and not task.done():
                 task.cancel()
