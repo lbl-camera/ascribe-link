@@ -13,12 +13,14 @@ Code execution is sandboxed via Firejail when available, providing:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import shutil
 import sys
 import tempfile
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Annotated
 
@@ -111,6 +113,114 @@ def _emit_agent_events(msg: Any, reporter: ProgressReporter) -> None:
             content = getattr(msg, "content", None)
             summary = str(content)[:120] if content else "unknown"
             reporter.report(f"Tool error: {summary}")
+
+
+# ---------------------------------------------------------------------------
+# Conversation transcript
+# ---------------------------------------------------------------------------
+
+
+class TranscriptWriter:
+    """Append a human-readable Markdown transcript of an agent run.
+
+    Best-effort debugging artifact: every write is wrapped so a transcript
+    failure can never break the agent loop. Messages are identified by duck
+    typing (type name / attributes) rather than SDK imports so this works
+    without claude_agent_sdk installed and with mocked message objects.
+    """
+
+    MAX_VALUE_CHARS = 2000
+
+    def __init__(
+        self,
+        path: str | Path,
+        user_prompt: str,
+        model: str | None = None,
+    ) -> None:
+        self.path = Path(path)
+        header = "# Agent Transcript\n\n"
+        header += f"- Started: {datetime.now().isoformat(timespec='seconds')}\n"
+        if model:
+            header += f"- Model: {model}\n"
+        header += f"\n## User\n\n{user_prompt}\n"
+        self._append(header)
+
+    def _append(self, text: str) -> None:
+        try:
+            with open(self.path, "a", encoding="utf-8") as f:
+                f.write(text)
+        except Exception as err:
+            logger.warning("Transcript write failed: %s", err)
+
+    def _truncate(self, text: str) -> str:
+        if len(text) <= self.MAX_VALUE_CHARS:
+            return text
+        return (
+            text[: self.MAX_VALUE_CHARS]
+            + f"... [truncated, {len(text)} chars total]"
+        )
+
+    def record(self, msg: Any) -> None:
+        """Append the relevant parts of one SDK message to the transcript."""
+        try:
+            self._record(msg)
+        except Exception as err:
+            logger.warning("Transcript record failed: %s", err)
+
+    def _record(self, msg: Any) -> None:
+        msg_type = type(msg).__name__
+        if msg_type == "AssistantMessage":
+            for block in getattr(msg, "content", []) or []:
+                self._record_block(block)
+        elif msg_type == "UserMessage":
+            content = getattr(msg, "content", None)
+            if isinstance(content, list):
+                for block in content:
+                    if hasattr(block, "tool_use_id") or hasattr(block, "is_error"):
+                        self._record_tool_result(block)
+        elif msg_type == "ResultMessage":
+            result = getattr(msg, "result", None)
+            is_error = getattr(msg, "is_error", False)
+            status = "error" if is_error else "success"
+            text = self._truncate(str(result)) if result else ""
+            self._append(f"\n## Result ({status})\n\n{text}\n")
+
+    def _record_block(self, block: Any) -> None:
+        thinking = getattr(block, "thinking", None)
+        if thinking:
+            self._append(f"\n*Thinking:* {self._truncate(str(thinking))}\n")
+        elif hasattr(block, "name"):
+            # ToolUseBlock — render name plus each argument, truncated.
+            name = getattr(block, "name", "unknown")
+            tool_input = getattr(block, "input", {})
+            lines = [f"\n### Tool: {name}\n", "```json", "{"]
+            if isinstance(tool_input, dict):
+                items = list(tool_input.items())
+                for i, (key, value) in enumerate(items):
+                    try:
+                        rendered = json.dumps(value, default=str)
+                    except Exception:
+                        rendered = repr(value)
+                    comma = "," if i < len(items) - 1 else ""
+                    lines.append(
+                        f'  "{key}": {self._truncate(rendered)}{comma}'
+                    )
+            else:
+                lines.append(f"  {self._truncate(str(tool_input))}")
+            lines.extend(["}", "```", ""])
+            self._append("\n".join(lines))
+        elif hasattr(block, "text"):
+            text = (getattr(block, "text", "") or "").strip()
+            if text:
+                self._append(f"\n## Assistant\n\n{text}\n")
+
+    def _record_tool_result(self, block: Any) -> None:
+        is_error = getattr(block, "is_error", False)
+        content = getattr(block, "content", None)
+        if content is None:
+            return
+        label = "Tool result (error)" if is_error else "Tool result"
+        self._append(f"\n**{label}:** {self._truncate(str(content))}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -969,6 +1079,11 @@ async def generate_with_agent(
     logger.info("Starting generation agent: %s", prompt[:100])
     gt_mark("agent: starting (spawning Claude CLI)")
 
+    transcript = TranscriptWriter(
+        working_dir_path / "transcript.md", user_prompt, model=model
+    )
+    logger.info("Agent transcript: %s", transcript.path)
+
     try:
         async with ClaudeSDKClient(options=options) as client:
             logger.info("ClaudeSDKClient connected, sending query...")
@@ -986,6 +1101,7 @@ async def generate_with_agent(
                     if msg_count == 1:
                         gt_mark("agent: first SDK message received")
                     logger.info("Received message #%d: %s", msg_count, msg_type)
+                    transcript.record(msg)
                     try:
                         _emit_agent_events(msg, reporter)
                     except Exception as _emit_err:
@@ -1109,8 +1225,9 @@ def create_agent_function(
     """
 
     async def agent_generate(
-        prompt: Annotated[str, "textarea"] = r"Read the tif stacks at ~/Downloads/5dry.tif and ~/Downloads/60dry.tif and slice out a cube of equal length/width/height from the center. Subtract the 10th percentile from each; that will be the 'raw' data. Perform threshold using Yen method from skimage, assuming the background is dark. Then use skimage.regionprops to filter out objects smaller than 500 voxels. Use that result to mask the original 'cube' data. Return a 2x2 stack of the raw and masked data with a small gap between each. Each dataset should be processed individually."
-                                             r"Note, this is a dry run. Afterwards, any issues you encounter should be investigated, and the system prompt in agent_generator.py (C:\Users\rp\PycharmProjects\ascribe-link\ascribe_link\agent_generator.py) should be modified to reduce friction in future runs. Do not actually submit the result until you've updated the system prompt.",
+        prompt: Annotated[str, "textarea"] = r"Load the plant volume from tif stack at \"C:\Users\rp\Downloads\rec20201028_190153_esther-singer_wet2_pipette_z50_YESagar_x00y01_8bitcrop-roi.tif\". Subsample it by a factor of 4. Install SAM, then run SAM segmentation to isolate the plant structure and generate a mesh. Then run adaptive remeshing. Submit the final result mesh.",
+                                             #r"Read the tif stacks at ~/Downloads/5dry.tif and ~/Downloads/60dry.tif and slice out a cube of equal length/width/height from the center; that will be the 'raw' data. Treating each dataset individually, perform threshold using Yen method from skimage, assuming the background is dark. Then use skimage.regionprops to filter out objects smaller than 200 voxels. Use that result to mask the original 'cube' data. Return a 2x2 stack of the raw and masked data with a small gap between each.",
+                                             #r"Note, this is a dry run. Afterwards, any issues you encounter should be investigated, and the system prompt in agent_generator.py (C:\Users\rp\PycharmProjects\ascribe-link\ascribe_link\agent_generator.py) should be modified to reduce friction in future runs. Do not actually submit the result until you've updated the system prompt.",
         file_path: str = "",
         reporter: ProgressReporter | None = None,
     ) -> dict[str, Any]:
