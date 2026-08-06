@@ -1,0 +1,7 @@
+nfiles 200
+loaded (200, 1012, 456) uint8
+downsampled (100, 506, 228) uint8
+mask voxels 775218
+nlabels 25772
+kept objects 31 voxels 629012
+saved (100, 506, 228) uint8

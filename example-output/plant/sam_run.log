@@ -1,0 +1,15 @@
+model loaded 0.9 s
+slice 0/126 z=0 area=3871 score=0.88 elapsed=8.6s
+slice 10/126 z=20 area=6837 score=0.95 elapsed=88.1s
+slice 20/126 z=40 area=7450 score=0.93 elapsed=166.7s
+slice 30/126 z=60 area=7819 score=0.96 elapsed=245.5s
+slice 40/126 z=80 area=7500 score=0.95 elapsed=326.5s
+slice 50/126 z=100 area=8054 score=0.98 elapsed=406.0s
+slice 60/126 z=120 area=8821 score=0.98 elapsed=484.6s
+slice 70/126 z=140 area=4526 score=0.95 elapsed=563.6s
+slice 80/126 z=160 area=4941 score=0.96 elapsed=642.7s
+slice 90/126 z=180 area=5084 score=0.97 elapsed=722.9s
+slice 100/126 z=200 area=5252 score=0.94 elapsed=802.1s
+slice 110/126 z=220 area=5504 score=0.91 elapsed=881.7s
+slice 120/126 z=240 area=6417 score=0.94 elapsed=962.0s
+DONE sam 1001.8 s, sampled 126 slices

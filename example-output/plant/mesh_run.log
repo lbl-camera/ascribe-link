@@ -1,0 +1,6 @@
+masks (126, 131, 204) zs 0 250
+occupancy voxels 1549276
+final voxels 1738449 components 21
+raw mesh: V 214708 F 429432
+after adaptive remesh: V 8778 F 17572
+SUBMIT_READY verts 8778 tris 17572 time 3.8 s

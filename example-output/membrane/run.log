@@ -1,0 +1,7 @@
+cube edge: 151
+processing 5dry.tif
+  yen t= 10718 kept voxels= 511458
+processing 60dry.tif
+  yen t= 10075 kept voxels= 1734188
+output shape: (151, 302, 302) uint16
+saved
