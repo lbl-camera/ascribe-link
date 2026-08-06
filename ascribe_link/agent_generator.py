@@ -279,6 +279,14 @@ Shell/filesystem gotchas that will otherwise cost you a run:
   Put your scripts in a dedicated work dir (e.g. `~/ascribe_work`).
 - Large TIFF stacks (can be multi-GB) do NOT need to be fully loaded. Read only the
   pages you need, e.g. `tif.asarray(key=range(z0, z0 + d))`, then crop in XY.
+- OUTPUT DISCIPLINE (critical — large tool output stalls the host app):
+  every tool result you receive is parsed by the host application, and a
+  multi-megabyte result freezes it for seconds. Redirect long-running
+  command output to a log file (`command > run.log 2>&1`) and inspect the
+  tail (`tail -n 50 run.log`) instead of letting it stream to stdout. When
+  waiting on a background task, poll with SHORT timeouts and read only new
+  output — never block until completion and swallow the full accumulated
+  log in one result. Never print arrays or file contents wholesale.
 
 Also known and harmless: skimage import may print a matplotlib traceback.
 It is an optional-dependency check that skimage swallows — if your script
@@ -1083,6 +1091,9 @@ async def generate_with_agent(
         working_dir_path / "transcript.md", user_prompt, model=model
     )
     logger.info("Agent transcript: %s", transcript.path)
+    # Also report it: when running in a child process the logger output is
+    # not configured/visible, but reporter messages are relayed to the app.
+    reporter.report(f"Transcript: {transcript.path}")
 
     try:
         async with ClaudeSDKClient(options=options) as client:
@@ -1195,6 +1206,102 @@ async def generate_with_agent(
 
 
 # ---------------------------------------------------------------------------
+# Process isolation
+#
+# The Agent SDK parses each CLI message with a single json.loads call. A
+# large tool result (e.g. the accumulated stdout of a long background task)
+# holds the GIL for the whole parse — observed stalling the server's main
+# event loop for 10+ seconds, which makes ASCRIBE-XR's /progress polls fail
+# with "HTTP 0". Running the agent in a child process keeps every byte the
+# SDK parses out of the server process entirely.
+# ---------------------------------------------------------------------------
+
+
+class _QueueReporter(ProgressReporter):
+    """Reporter that forwards progress messages over a multiprocessing queue."""
+
+    def __init__(self, queue: Any) -> None:
+        self._queue = queue
+
+    def report(self, text: str) -> None:
+        try:
+            self._queue.put(("progress", text))
+        except Exception:
+            pass
+
+
+def _agent_process_worker(queue: Any, kwargs: dict[str, Any]) -> None:
+    """Child-process entry point: run the agent and send back the result.
+
+    Must stay module-level so it is picklable under the 'spawn' start method
+    (the only one available on Windows). Communicates exclusively via the
+    queue: ("progress", text) during the run, then one final ("result", dict)
+    or ("error", (type_name, message)).
+    """
+    try:
+        result = asyncio.run(
+            generate_with_agent(reporter=_QueueReporter(queue), **kwargs)
+        )
+        queue.put(("result", result))
+    except BaseException as e:  # noqa: BLE001 — must reach the parent
+        queue.put(("error", (type(e).__name__, str(e))))
+
+
+def _run_agent_in_subprocess(
+    kwargs: dict[str, Any],
+    reporter: ProgressReporter,
+    grace: float = 60.0,
+) -> dict[str, Any]:
+    """Run the agent in a child process, relaying progress to `reporter`.
+
+    Blocking — intended to be called via asyncio.to_thread(). The child
+    enforces the agent timeout itself; the parent adds `grace` seconds on
+    top as a backstop against a hung child.
+    """
+    import multiprocessing
+    import queue as queue_mod
+    import time
+
+    ctx = multiprocessing.get_context("spawn")
+    q = ctx.Queue()
+    proc = ctx.Process(target=_agent_process_worker, args=(q, kwargs), daemon=True)
+    proc.start()
+    logger.info("Agent subprocess started (pid=%s)", proc.pid)
+    timeout = kwargs.get("timeout")
+    timeout = float(timeout) if timeout is not None else 3000.0
+    deadline = time.monotonic() + timeout + grace
+
+    try:
+        while True:
+            try:
+                kind, payload = q.get(timeout=1.0)
+            except queue_mod.Empty:
+                if not proc.is_alive():
+                    raise ValueError(
+                        "Agent process exited unexpectedly "
+                        f"(exitcode={proc.exitcode})"
+                    )
+                if time.monotonic() > deadline:
+                    raise TimeoutError(
+                        "Agent subprocess exceeded timeout and grace period"
+                    )
+                continue
+            if kind == "progress":
+                reporter.report(payload)
+            elif kind == "result":
+                return payload
+            elif kind == "error":
+                type_name, message = payload
+                if type_name == "TimeoutError":
+                    raise TimeoutError(message)
+                raise ValueError(f"Agent failed ({type_name}): {message}")
+    finally:
+        if proc.is_alive():
+            proc.terminate()
+        proc.join(timeout=5.0)
+
+
+# ---------------------------------------------------------------------------
 # Wrapper for FunctionRegistry integration
 # ---------------------------------------------------------------------------
 
@@ -1204,6 +1311,7 @@ def create_agent_function(
     timeout: float = 3000.0,
     sandbox: bool = True,
     sandbox_config: SandboxConfig | None = None,
+    isolate_process: bool = True,
 ):
     """Create an agent-based generation function for the registry.
 
@@ -1217,6 +1325,10 @@ def create_agent_function(
         If True, wrap Bash commands in Firejail sandbox.
     sandbox_config : SandboxConfig, optional
         Configuration for sandbox limits.
+    isolate_process : bool
+        If True (default), run the agent in a child process so SDK message
+        parsing can never hold this process's GIL (which stalls the HTTP
+        event loop). Set False to run in-process (tests, debugging).
 
     Returns
     -------
@@ -1250,15 +1362,19 @@ def create_agent_function(
         dict
             Result with 'type' field ("mesh" or "volume") and corresponding data.
         """
-        return await generate_with_agent(
+        kwargs = dict(
             prompt=prompt,
             file_path=file_path,
             model=model,
             timeout=timeout,
             sandbox=sandbox,
             sandbox_config=sandbox_config,
-            reporter=reporter,
         )
+        if isolate_process:
+            return await asyncio.to_thread(
+                _run_agent_in_subprocess, kwargs, reporter or ProgressReporter()
+            )
+        return await generate_with_agent(reporter=reporter, **kwargs)
 
     return agent_generate
 
