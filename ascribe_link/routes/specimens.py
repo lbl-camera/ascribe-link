@@ -255,7 +255,9 @@ class SpecimenController(Controller):
                     raise NotFoundException(detail=response["error"])
 
                 # Response contains base64-encoded data, content_type, and filename
-                data_bytes = base64.b64decode(response.get("data", ""))
+                data_bytes = await asyncio.to_thread(
+                    base64.b64decode, response.get("data", "")
+                )
                 content_type = response.get("content_type", "application/octet-stream")
                 filename = response.get("filename", "data")
                 return Response(
@@ -299,7 +301,10 @@ class SpecimenController(Controller):
                 logger.info("Cache hit for %s/%s", room_id, meta.function_name)
                 gt_mark(f"/data: cache hit, encoding envelope ({specimen_id})")
                 _enc_t0 = time.perf_counter()
-                _payload = encode_envelope(cached_result)
+                # Off-loop: envelope-encoding a large mesh/volume takes
+                # seconds and was observed stalling the main event loop
+                # (starving /progress polls -> XR "HTTP 0" errors).
+                _payload = await asyncio.to_thread(encode_envelope, cached_result)
                 gt_mark(
                     f"/data: envelope encoded ({len(_payload)} bytes, "
                     f"{time.perf_counter() - _enc_t0:.3f}s encode), sending"
@@ -331,7 +336,7 @@ class SpecimenController(Controller):
             # Cache the raw result object (widened in Task 6); then envelope-serve.
             result_cache.put(room_id, meta.function_name, params, result)
             return Response(
-                content=encode_envelope(result),
+                content=await asyncio.to_thread(encode_envelope, result),
                 media_type=ENVELOPE_MEDIA_TYPE,
             )
 
@@ -343,9 +348,12 @@ class SpecimenController(Controller):
         # Volumes -> envelope; raw mesh files -> stream as-is.
         if meta.type == SpecimenType.VOLUME and path.suffix.lower() == ".npy":
             from ascribe_link.specimen_store import load_static_volume
-            result = load_static_volume(path.parent, path.name)
+
+            def _load_and_encode() -> bytes:
+                return encode_envelope(load_static_volume(path.parent, path.name))
+
             return Response(
-                content=encode_envelope(result),
+                content=await asyncio.to_thread(_load_and_encode),
                 media_type=ENVELOPE_MEDIA_TYPE,
             )
 

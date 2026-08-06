@@ -307,11 +307,13 @@ class FunctionRegistry:
         kwargs = self._coerce_kwargs(func, kwargs or {})
         kwargs = self._inject_reporter(func, kwargs, reporter)
 
-        # Call function (handle both sync and async)
+        # Call function (handle both sync and async). Sync functions are
+        # offloaded to a thread so a slow one (big parametric generation)
+        # can't block the calling event loop and starve HTTP polls.
         if asyncio.iscoroutinefunction(func):
             result = await func(*(args or []), **kwargs)
         else:
-            result = func(*(args or []), **kwargs)
+            result = await asyncio.to_thread(func, *(args or []), **kwargs)
 
         # Convert raw result to typed result
         return self._convert_result(result, self._return_types.get(name))
