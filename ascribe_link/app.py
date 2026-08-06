@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from litestar import Litestar, Response
 from litestar.config.cors import CORSConfig
@@ -96,6 +96,41 @@ def _run_thread_lag_watchdog(
                 lag,
             )
             gt_mark(f"thread watchdog: process-wide stall {lag:.2f}s")
+
+
+class _SlowRequestLoggerMiddleware:
+    """Warn with method+path when a request takes long end-to-end.
+
+    Complements the loop watchdog: asyncio debug names only
+    RequestResponseCycle.run_asgi for a slow request; this names the route.
+    Duration is wall-clock (includes await time / client backpressure), so
+    only lines that coincide with a watchdog stall indicate loop blocking.
+    """
+
+    THRESHOLD = 1.0
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        import time
+
+        t0 = time.perf_counter()
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            elapsed = time.perf_counter() - t0
+            if elapsed > self.THRESHOLD:
+                logger.warning(
+                    "Slow request: %s %s?%s took %.2fs",
+                    scope.get("method"),
+                    scope.get("path"),
+                    (scope.get("query_string") or b"").decode(errors="replace"),
+                    elapsed,
+                )
 
 
 def _default_specimens_dir() -> Path:
@@ -301,6 +336,7 @@ def create_app(
             "job_registry": Provide(provide_job_registry, sync_to_thread=False),
         },
         cors_config=CORSConfig(allow_origins=["*"]),
+        middleware=[_SlowRequestLoggerMiddleware],
         exception_handlers={Exception: log_exception_handler},
         debug=True,
         openapi_config=OpenAPIConfig(
