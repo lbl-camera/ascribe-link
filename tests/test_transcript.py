@@ -17,9 +17,10 @@ class UserMessage:
 
 
 class ResultMessage:
-    def __init__(self, result=None, is_error=False):
+    def __init__(self, result=None, is_error=False, subtype=None):
         self.result = result
         self.is_error = is_error
+        self.subtype = subtype
 
 
 class TextBlock:
@@ -112,6 +113,13 @@ def test_result_message(transcript):
     text = path.read_text(encoding="utf-8")
     assert "## Result (success)" in text
     assert "Mesh submitted" in text
+
+
+def test_result_message_subtype_shown(transcript):
+    tw, path = transcript
+    tw.record(ResultMessage(subtype="error_max_turns"))
+    text = path.read_text(encoding="utf-8")
+    assert "## Result (success, error_max_turns)" in text
 
 
 def test_malformed_message_does_not_raise(transcript):

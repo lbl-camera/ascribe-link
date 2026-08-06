@@ -181,7 +181,10 @@ class TranscriptWriter:
         elif msg_type == "ResultMessage":
             result = getattr(msg, "result", None)
             is_error = getattr(msg, "is_error", False)
+            subtype = getattr(msg, "subtype", None)
             status = "error" if is_error else "success"
+            if subtype and subtype != "success":
+                status = f"{status}, {subtype}"
             text = self._truncate(str(result)) if result else ""
             self._append(f"\n## Result ({status})\n\n{text}\n")
 
@@ -1080,12 +1083,19 @@ async def generate_with_agent(
         # acceptEdits only auto-approves edits under cwd; include the repo so
         # the agent can modify its own source without a permission prompt.
         add_dirs=[str(Path(__file__).resolve().parent.parent)],
-        max_turns=25,  # Encourage efficiency
+        # Generous ceiling: long compute tasks (e.g. 10+ min segmentations)
+        # legitimately spend many turns polling a background task. 25 was
+        # observed killing runs mid-poll with error_max_turns.
+        max_turns=150,
         hooks=hooks if hooks else None,
     )
 
     logger.info("Starting generation agent: %s", prompt[:100])
     gt_mark("agent: starting (spawning Claude CLI)")
+
+    # Populated from the final ResultMessage so a run that ends without a
+    # submission can say WHY (e.g. "error_max_turns" = turn limit hit).
+    final_state: dict[str, Any] = {"subtype": None}
 
     transcript = TranscriptWriter(
         working_dir_path / "transcript.md", user_prompt, model=model
@@ -1135,8 +1145,10 @@ async def generate_with_agent(
                                     else "N/A",
                                 )
                     elif isinstance(msg, ResultMessage):
+                        final_state["subtype"] = getattr(msg, "subtype", None)
                         logger.info(
-                            "Result message received: %s",
+                            "Result message received (subtype=%s): %s",
+                            final_state["subtype"],
                             getattr(msg, "result", "no result attr"),
                         )
 
@@ -1152,8 +1164,10 @@ async def generate_with_agent(
                         return
 
                 logger.warning(
-                    "Response loop ended without submission (processed %d messages)",
+                    "Response loop ended without submission "
+                    "(processed %d messages, result subtype=%s)",
                     msg_count,
+                    final_state["subtype"],
                 )
 
             try:
@@ -1166,8 +1180,17 @@ async def generate_with_agent(
         raise
 
     if not result.submitted:
+        subtype = final_state["subtype"]
+        if subtype == "error_max_turns":
+            raise ValueError(
+                "Agent hit the max_turns limit before submitting a result. "
+                "The task may need more turns (long background compute with "
+                "many polls) — consider raising max_turns."
+            )
         raise ValueError(
-            "Agent did not submit any data. It may have encountered an error."
+            "Agent did not submit any data"
+            + (f" (session ended with {subtype})" if subtype else "")
+            + ". It may have encountered an error."
         )
 
     # Build result dictionary based on type

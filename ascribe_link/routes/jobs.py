@@ -1,10 +1,12 @@
 """Job endpoints: poll progress, fetch result, cancel."""
 from __future__ import annotations
 
+import asyncio
+import json
 import time
 from typing import Any
 
-from litestar import Controller, get, delete
+from litestar import Controller, Response, get, delete
 from litestar.exceptions import HTTPException, NotFoundException
 
 from ascribe_link.federation import FederationHub
@@ -28,6 +30,17 @@ def _coerce_result(value: Any) -> Any:
     if isinstance(value, (MeshResult, VolumeResult, PointCloudResult, ImageResult)):
         return result_to_dict(value)
     return value
+
+
+def _encode_result(value: Any) -> bytes:
+    """Coerce and JSON-encode a Job.result to response bytes.
+
+    Blocking by design — run via asyncio.to_thread(). Coercion and encoding
+    of a large mesh/volume can take seconds; doing it in the handler was
+    observed blocking the main event loop for 4.6s (asyncio debug named
+    RequestResponseCycle.run_asgi), which starves /progress polls.
+    """
+    return json.dumps(_coerce_result(value)).encode("utf-8")
 
 
 class JobController(Controller):
@@ -80,7 +93,7 @@ class JobController(Controller):
         job_registry: JobRegistry,
         job_id: str,
         federation_hub: FederationHub | None = None,
-    ) -> dict[str, Any]:
+    ) -> Response:
         job = await job_registry.get(job_id)
         if job is None:
             raise NotFoundException(detail=f"Unknown job: {job_id}")
@@ -92,7 +105,7 @@ class JobController(Controller):
             )
             if "error" in response:
                 raise HTTPException(status_code=410, detail=response["error"])
-            return response
+            return Response(content=response, media_type="application/json")
 
         if job.status == "running":
             raise HTTPException(status_code=409, detail="Job still running")
@@ -100,15 +113,16 @@ class JobController(Controller):
             raise HTTPException(
                 status_code=410, detail=f"Job failed: {job.error}"
             )
-        # status == "done"
-        gt_mark("/result: request received, coercing result")
+        # status == "done" — coerce + encode off-loop so a multi-second
+        # serialization of a big mesh/volume can't stall /progress polls.
+        gt_mark("/result: request received, encoding off-loop")
         _t0 = time.perf_counter()
-        payload = _coerce_result(job.result)
+        body = await asyncio.to_thread(_encode_result, job.result)
         gt_mark(
-            f"/result: coerced to JSON-ready dict "
+            f"/result: encoded {len(body)} bytes "
             f"({time.perf_counter() - _t0:.3f}s), sending"
         )
-        return payload
+        return Response(content=body, media_type="application/json")
 
     @delete("/{job_id:str}", status_code=204)
     async def delete_job(
