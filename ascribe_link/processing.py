@@ -16,12 +16,12 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from itertools import chain
 from typing import (
     Annotated,
     Any,
-    Callable,
     Literal,
     get_args,
     get_origin,
@@ -39,7 +39,6 @@ from ascribe_link.models import (
     SpecimenMetadata,
     SpecimenType,
     VolumeResult,
-    result_to_dict,
 )
 from ascribe_link.progress import ProgressReporter
 

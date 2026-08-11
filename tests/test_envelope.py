@@ -7,7 +7,7 @@ import struct
 import numpy as np
 import pytest
 
-from ascribe_link.envelope import decode_envelope, encode_envelope, ENVELOPE_MEDIA_TYPE
+from ascribe_link.envelope import ENVELOPE_MEDIA_TYPE, decode_envelope, encode_envelope
 from ascribe_link.models import MeshResult, VolumeResult
 
 

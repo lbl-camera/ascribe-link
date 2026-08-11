@@ -27,8 +27,8 @@ __all__ = [
 # Optional: agent generator (requires claude-agent-sdk)
 try:
     from ascribe_link.agent_generator import (
-        generate_mesh_with_agent,
         create_agent_function,
+        generate_mesh_with_agent,
     )
 
     __all__.extend(["generate_mesh_with_agent", "create_agent_function"])

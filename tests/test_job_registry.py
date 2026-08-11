@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from ascribe_link.job_registry import Job, JobRegistry
+from ascribe_link.job_registry import JobRegistry
 
 
 @pytest.fixture

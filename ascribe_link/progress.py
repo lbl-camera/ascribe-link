@@ -7,7 +7,6 @@ appends messages to the job's bounded message deque.
 """
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 
 
@@ -35,7 +34,7 @@ class ProgressReporter:
 class JobReporter(ProgressReporter):
     """Reporter that appends messages to a specific Job's deque."""
 
-    def __init__(self, job: "Job") -> None:  # noqa: F821 — forward ref
+    def __init__(self, job: Job) -> None:  # noqa: F821 — forward ref
         self._job = job
 
     def report(self, text: str) -> None:

@@ -255,7 +255,7 @@ print(json.dumps(result))
             stdout = stdout_bytes.decode("utf-8", errors="replace")
             stderr = stderr_bytes.decode("utf-8", errors="replace")
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             proc.kill()
             return SandboxResult(
                 success=False,

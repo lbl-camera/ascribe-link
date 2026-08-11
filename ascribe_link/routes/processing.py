@@ -92,7 +92,7 @@ class ProcessingController(Controller):
         ```
         """
         room_id = data.room_id or "ascribe"
-        
+
         logger.info(
             "invoke_function: function=%s, args=%s, kwargs=%s, room_id=%s",
             data.function_name,
@@ -100,7 +100,7 @@ class ProcessingController(Controller):
             data.kwargs,
             room_id,
         )
-        
+
         # Check cache first
         cached_result = result_cache.get(room_id, data.function_name, data.kwargs)
         if cached_result is not None:
@@ -111,14 +111,14 @@ class ProcessingController(Controller):
                 list(data.kwargs.keys()),
             )
             return _coerce_to_dict(cached_result)
-        
+
         logger.info(
             "Cache miss: room=%s, function=%s, params=%s - computing result",
             room_id,
             data.function_name,
             list(data.kwargs.keys()),
         )
-        
+
         # Compute result
         try:
             result = await function_registry.invoke_async(
@@ -144,7 +144,7 @@ class ProcessingController(Controller):
             import traceback
             logger.error("Error invoking %s: %s\n%s", data.function_name, e, traceback.format_exc())
             raise
-        
+
         # Cache the raw Result so the cache shape stays uniform across endpoints.
         # Consumers (this route, /api/specimens/{id}/data, etc.) normalize on read.
         result_cache.put(room_id, data.function_name, data.kwargs, result)

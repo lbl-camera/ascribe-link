@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 def extract_mesh_data(
-    mesh: "pv.PolyData", include_normals: bool = True
+    mesh: pv.PolyData, include_normals: bool = True
 ) -> tuple[list[list[float]], list[int], list[float] | None]:
     """Extract vertices, indices, and normals from a PyVista mesh.
 

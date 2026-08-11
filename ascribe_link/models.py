@@ -90,7 +90,7 @@ class MeshResult:
         return d
 
     @classmethod
-    def from_pyvista(cls, mesh) -> "MeshResult":
+    def from_pyvista(cls, mesh) -> MeshResult:
         """Create from a PyVista mesh."""
         vertices = mesh.points.flatten().tolist()
         # PyVista faces format: [n, i1, i2, ..., in, n, j1, j2, ..., jn, ...]
@@ -162,7 +162,7 @@ class VolumeResult:
         arr: np.ndarray,
         spacing: list[float] | None = None,
         origin: list[float] | None = None,
-    ) -> "VolumeResult":
+    ) -> VolumeResult:
         """Create from a NumPy array."""
         # Ensure C-contiguous for consistent byte order
         arr = np.ascontiguousarray(arr)
@@ -223,7 +223,7 @@ class PointCloudResult:
         colors: np.ndarray | None = None,
         scalars: np.ndarray | None = None,
         scalar_name: str | None = None,
-    ) -> "PointCloudResult":
+    ) -> PointCloudResult:
         """Create from NumPy arrays."""
         return cls(
             points=points.flatten().tolist(),
@@ -279,7 +279,7 @@ class ImageResult:
         return arr.reshape((self.height, self.width, self.channels))
 
     @classmethod
-    def from_numpy(cls, arr: np.ndarray) -> "ImageResult":
+    def from_numpy(cls, arr: np.ndarray) -> ImageResult:
         """Create from a NumPy array (H, W) or (H, W, C)."""
         arr = np.ascontiguousarray(arr)
         if arr.ndim == 2:

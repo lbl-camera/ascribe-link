@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from httpx import AsyncClient
 
 from ascribe_link.app import create_app
 from ascribe_link.processing import FunctionRegistry

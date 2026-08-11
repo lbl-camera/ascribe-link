@@ -1,6 +1,6 @@
 """Tests for ProgressReporter and ProgressMessage."""
-from ascribe_link.progress import ProgressReporter, ProgressMessage, JobReporter
 from ascribe_link.job_registry import Job
+from ascribe_link.progress import JobReporter, ProgressMessage, ProgressReporter
 
 
 def test_progress_message_is_frozen_dataclass():

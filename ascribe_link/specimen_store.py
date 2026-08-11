@@ -10,10 +10,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from ascribe_link.models import SpecimenMetadata, SpecimenType
+
+if TYPE_CHECKING:
+    from ascribe_link.models import VolumeResult
 
 
 class SpecimenStore:
@@ -36,21 +40,21 @@ class SpecimenStore:
         """(Re-)scan the specimen directory and rebuild the cache."""
         import logging
         logger = logging.getLogger(__name__)
-        
+
         self._cache.clear()
         logger.info(f"Scanning specimen directory: {self._root.absolute()}")
-        
+
         if not self._root.exists():
             logger.warning(f"Specimen directory does not exist: {self._root.absolute()}")
             return
-        
+
         if not self._root.is_dir():
             logger.warning(f"Specimen path is not a directory: {self._root.absolute()}")
             return
-        
+
         children = list(self._root.iterdir())
         logger.info(f"Found {len(children)} items in specimen directory")
-        
+
         for child in sorted(children):
             logger.debug(f"Checking: {child.name}")
             if not child.is_dir():
@@ -128,7 +132,7 @@ class SpecimenStore:
         )
 
 
-def load_static_volume(spec_dir: Path, data_file: str) -> "VolumeResult":
+def load_static_volume(spec_dir: Path, data_file: str) -> VolumeResult:
     """Load a static volume specimen from disk (currently .npy + optional .json sidecar).
 
     Parameters

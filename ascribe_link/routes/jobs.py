@@ -6,7 +6,7 @@ import json
 import time
 from typing import Any
 
-from litestar import Controller, Response, get, delete
+from litestar import Controller, Response, delete, get
 from litestar.exceptions import HTTPException, NotFoundException
 
 from ascribe_link.federation import FederationHub

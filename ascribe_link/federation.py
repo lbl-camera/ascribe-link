@@ -15,7 +15,6 @@ import json
 import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
-from weakref import WeakSet
 
 if TYPE_CHECKING:
     from litestar.connection import WebSocket

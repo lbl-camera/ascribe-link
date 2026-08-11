@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 from litestar import Controller, Response, get, post
-from litestar.di import Provide
 from litestar.exceptions import HTTPException, NotFoundException
 from litestar.response import File
 
@@ -274,11 +273,11 @@ class SpecimenController(Controller):
 
         # Check code-registered specimens first
         meta = function_registry.get_specimen(specimen_id)
-        
+
         # Fall back to filesystem specimen
         if meta is None:
             meta = specimen_store.get(specimen_id)
-        
+
         if meta is None:
             raise NotFoundException(detail=f"Specimen not found: {specimen_id}")
 
@@ -287,7 +286,7 @@ class SpecimenController(Controller):
             # Extract defaults from schema if params not provided
             if not params and meta.schema:
                 params = _extract_schema_defaults(meta.schema)
-            
+
             logger.info(
                 "Dynamic specimen %s: invoking %s with params=%s",
                 specimen_id,

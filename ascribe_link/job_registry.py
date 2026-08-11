@@ -11,10 +11,9 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from ascribe_link.progress import ProgressMessage
-
 
 Status = Literal["running", "done", "error"]
 
@@ -39,12 +38,12 @@ class Job:
     )
     next_seq: int = 0
     result: Any = None
-    error: Optional[str] = None
-    task: Optional[asyncio.Task] = None
+    error: str | None = None
+    task: asyncio.Task | None = None
     created_at: float = field(default_factory=time.monotonic)
-    finished_at: Optional[float] = None
+    finished_at: float | None = None
     # For federated jobs: the (worker_id, worker_job_id) to proxy to.
-    federated_to: Optional[tuple[str, str]] = None
+    federated_to: tuple[str, str] | None = None
 
     def append_message(self, text: str) -> ProgressMessage:
         """Append a new progress message and bump next_seq."""
@@ -84,7 +83,7 @@ class JobRegistry:
             self._jobs[job_id] = job
         return job
 
-    async def get(self, job_id: str) -> Optional[Job]:
+    async def get(self, job_id: str) -> Job | None:
         async with self._lock:
             return self._jobs.get(job_id)
 

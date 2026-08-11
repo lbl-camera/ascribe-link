@@ -2,14 +2,10 @@
 from __future__ import annotations
 
 import queue as queue_mod
-import threading
-import time
 
 import pytest
 
 from ascribe_link.agent_generator import (
-    _agent_process_worker,
-    _run_agent_in_subprocess,
     _QueueReporter,
 )
 from ascribe_link.progress import ProgressReporter
@@ -48,8 +44,9 @@ class _FakeProc:
 
 def _run_parent_loop(q, proc, reporter, kwargs=None, grace=60.0):
     """Drive the queue-consuming loop against a plain queue + fake proc."""
-    import ascribe_link.agent_generator as ag
     import multiprocessing
+
+    import ascribe_link.agent_generator as ag
 
     class _FakeCtx:
         def Queue(self):

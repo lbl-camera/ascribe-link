@@ -1,5 +1,6 @@
 import pyvista as pv
 
+
 def volume_to_mesh(volume, decimation=0.9):
     # Wrap the NumPy array into a PyVista dataset.
     wrapped = pv.wrap(volume)
