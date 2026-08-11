@@ -44,8 +44,14 @@ test = [
     "pytest-cov>=5.0",
     "httpx>=0.24",
 ]
+docs = [
+    "sphinx>=7.0,<9",
+    "myst-parser>=2.0",
+    "sphinx-immaterial>=0.12",
+    "sphinx-copybutton>=0.5",
+]
 dev = [
-    "ascribe-link[test]",
+    "ascribe-link[test,docs]",
     "ruff>=0.6",
     "build>=1.2",
 ]
