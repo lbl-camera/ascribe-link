@@ -1,12 +1,30 @@
 [build-system]
-requires = ["hatchling>=1.0.0"]
+requires = ["hatchling>=1.27", "hatch-vcs>=0.4"]
 build-backend = "hatchling.build"
 
 [project]
-name = "ascribe_link"
-version = "0.2.0"
+name = "ascribe-link"
+dynamic = ["version"]
 description = "Ascribe-Link: HTTP server bridging Python processing functions and curated specimens to Ascribe-XR"
+readme = "README.md"
+license = "BSD-3-Clause-LBNL"
+license-files = ["LICENSE.md", "LEGAL.md"]
 requires-python = ">=3.11"
+authors = [
+    { name = "Ronald Pandolfi", email = "ronpandolfi@lbl.gov" },
+]
+keywords = ["vr", "xr", "visualization", "scientific-data", "mesh", "litestar"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
 
 dependencies = [
     "numpy>=1.20",
@@ -20,18 +38,76 @@ dependencies = [
 agent = [
     "claude-agent-sdk>=0.1.0",
 ]
-dev = [
+test = [
     "pytest>=6.2",
     "pytest-asyncio>=0.21",
+    "pytest-cov>=5.0",
     "httpx>=0.24",
+]
+dev = [
+    "ascribe-link[test]",
+    "ruff>=0.6",
+    "build>=1.2",
 ]
 
 [project.scripts]
 ascribe-link = "ascribe_link.cli:main"
 
+[project.urls]
+Homepage = "https://github.com/ronpandolfi/Ascribe-Link"
+Issues = "https://github.com/ronpandolfi/Ascribe-Link/issues"
+Source = "https://github.com/ronpandolfi/Ascribe-Link"
+
+[tool.hatch.version]
+source = "vcs"
+fallback-version = "0.0.0"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "ascribe_link/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ascribe_link"]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/.github",
+    "/.idea",
+    "/ascribe_meshgen",
+    "/example-output",
+    "/specimens",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["ascribe_meshgen", "example-output"]
+
+[tool.ruff.lint]
+# Real errors + import hygiene. Style-only rules (line length, ternary
+# rewrites, raise-from) are left off so the lint gate stays meaningful.
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"ascribe_link/__init__.py" = ["F401"]
+# W293 fires on blank lines inside the embedded sandbox script literal
+"ascribe_link/sandbox.py" = ["W293"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
-[tool.hatch.build.targets.wheel]
-packages = ["ascribe_link"]
+[tool.coverage.run]
+source = ["ascribe_link"]
+branch = true
+omit = [
+    "ascribe_link/_version.py",
+    "tests/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]

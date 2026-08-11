@@ -5,3 +5,5 @@ __pycache__/
 *.egg-info/
 .idea/
 prompts.md
+_version.py
+dist/
