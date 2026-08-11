@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ascribe_link.specimen_store import SpecimenStore
+    pass
 
 
 def main() -> None:
@@ -125,7 +125,7 @@ def run_server_mode(args: argparse.Namespace) -> None:
 
     mode = "relay" if args.relay else "standalone"
     logging.info(f"Starting Ascribe-Link in {mode} mode")
-    
+
     # If specimens_dir not specified, default to repo root / specimens
     if args.specimens_dir is None:
         import ascribe_link
@@ -159,7 +159,7 @@ def run_worker_mode(args: argparse.Namespace) -> None:
     worker_id = args.worker_id or socket.gethostname()
     relay_url = args.worker
 
-    logging.info(f"Starting Ascribe-Link in worker mode")
+    logging.info("Starting Ascribe-Link in worker mode")
     logging.info(f"  Worker ID: {worker_id}")
     logging.info(f"  Relay URL: {relay_url}")
     logging.info(f"  Specimens: {args.specimens_dir}")

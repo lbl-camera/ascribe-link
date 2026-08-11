@@ -19,17 +19,17 @@ import os
 import shutil
 import sys
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Annotated
+from typing import Annotated, Any
 
 from ascribe_link.gen_timing import gt_mark
 from ascribe_link.progress import ProgressReporter
 from ascribe_link.sandbox import (
     SandboxConfig,
-    is_firejail_available,
     build_firejail_command,
+    is_firejail_available,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,11 +59,11 @@ def _emit_agent_events(msg: Any, reporter: ProgressReporter) -> None:
     # isn't installed (agent is an optional extra).
     from claude_agent_sdk import (
         AssistantMessage,
+        SessionMessage,
+        TaskNotificationMessage,
+        TaskProgressMessage,
         TextBlock,
         ToolResultBlock,
-        TaskProgressMessage,
-        TaskNotificationMessage,
-        SessionMessage,
     )
 
     if isinstance(msg, AssistantMessage):
@@ -511,7 +511,7 @@ def _load_volume_array(full_path: Path):
         import json
 
         try:
-            with open(full_path, "r") as f:
+            with open(full_path) as f:
                 env = json.load(f)
         except json.JSONDecodeError as e:
             raise ValueError(f"invalid JSON: {e}") from e
@@ -584,15 +584,14 @@ async def generate_with_agent(
         If the agent exceeds the timeout.
     """
     from claude_agent_sdk import (
+        AssistantMessage,
         ClaudeAgentOptions,
         ClaudeSDKClient,
-        AssistantMessage,
+        HookMatcher,
         ResultMessage,
         TextBlock,
-        ToolResultBlock,
-        HookMatcher,
-        tool,
         create_sdk_mcp_server,
+        tool,
     )
 
     result = AgentResult()
@@ -727,7 +726,6 @@ async def generate_with_agent(
         """Load mesh from JSON file and submit it."""
         gt_mark("submit_mesh_file: tool entry")
         import json
-        import math
 
         file_path = args.get("file_path", "")
         if not file_path:
@@ -745,7 +743,7 @@ async def generate_with_agent(
             }
 
         try:
-            with open(full_path, "r") as f:
+            with open(full_path) as f:
                 data = json.load(f)
         except json.JSONDecodeError as e:
             return {"content": [{"type": "text", "text": f"Error: invalid JSON: {e}"}]}
@@ -1172,7 +1170,7 @@ async def generate_with_agent(
 
             try:
                 await asyncio.wait_for(process_responses(), timeout=timeout)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 raise TimeoutError(f"Agent timed out after {timeout}s")
 
     except Exception as e:
@@ -1423,6 +1421,7 @@ def wrap_agent_output(value: Any):
     - anything else -> TypeError
     """
     import numpy as np
+
     from ascribe_link.models import MeshResult, VolumeResult
 
     if isinstance(value, (MeshResult, VolumeResult)):

@@ -233,7 +233,7 @@ def create_app(
                 return_type=None,  # Agent may return either MeshResult or VolumeResult
                 tags=["ai", "generative", "dynamic"],
             )
-            
+
             sandbox_status = "enabled" if is_firejail_available() else "disabled (firejail not found)"
             logger.info("AI agent generation enabled (model=%s, sandbox=%s)", agent_model, sandbox_status)
         except ImportError as e:
