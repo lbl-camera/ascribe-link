@@ -397,16 +397,7 @@ See `pyproject.toml` for full dependency list.
 4. Test with `./test_dynamic_specimen.py`
 5. Submit PR
 
-## License
-
-Copyright (c) 2025, The Regents of the University of California, through Lawrence Berkeley National Laboratory. All rights reserved.
-
 ## Related Projects
 
 - [Ascribe-XR](https://github.com/lbl-camera/Ascribe-XR) - VR client (Godot)
 - [Paper (ACM)](https://dl.acm.org/doi/10.1145/3731599.3767368) - VRST 2024 publication
-
-## Contact
-
-Advanced Light Source, Lawrence Berkeley National Laboratory
-- https://als.lbl.gov
