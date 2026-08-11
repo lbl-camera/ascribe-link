@@ -2,7 +2,6 @@
 """Quick test script to verify dynamic specimen API endpoints."""
 
 import asyncio
-import json
 
 import httpx
 
@@ -16,7 +15,7 @@ async def test_dynamic_specimen():
         response = await client.get(f"{base_url}/api/specimens/")
         specimens = response.json()
         print(f"   Found {len(specimens)} specimens")
-        
+
         # Find dynamic specimens
         dynamic = [s for s in specimens if s.get("is_dynamic")]
         print(f"   {len(dynamic)} are dynamic:")
@@ -82,7 +81,7 @@ async def test_dynamic_specimen():
             }
         )
         print(f"   First request: {response1.status_code}")
-        
+
         # Second request - should hit cache
         response2 = await client.post(
             f"{base_url}/api/processing/invoke",
@@ -94,11 +93,11 @@ async def test_dynamic_specimen():
             }
         )
         print(f"   Second request (same params): {response2.status_code}")
-        
+
         # Check results are identical
         if response1.json() == response2.json():
             print("   ✅ Cache working: identical results")
-        
+
         # Different params - should invalidate cache
         response3 = await client.post(
             f"{base_url}/api/processing/invoke",
