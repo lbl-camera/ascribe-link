@@ -54,9 +54,9 @@ dev = [
 ascribe-link = "ascribe_link.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/ronpandolfi/Ascribe-Link"
-Issues = "https://github.com/ronpandolfi/Ascribe-Link/issues"
-Source = "https://github.com/ronpandolfi/Ascribe-Link"
+Homepage = "https://github.com/lbl-camera/Ascribe-Link"
+Issues = "https://github.com/lbl-camera/Ascribe-Link/issues"
+Source = "https://github.com/lbl-camera/Ascribe-Link"
 
 [tool.hatch.version]
 source = "vcs"
