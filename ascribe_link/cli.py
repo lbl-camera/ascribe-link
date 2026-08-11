@@ -63,13 +63,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--agent-model",
-        default="claude-sonnet-4-5",
-        help="Claude model for agent generation (default: claude-sonnet-4-5)",
+        default="claude-opus-4-8",
+        help="Claude model for agent generation (default: claude-opus-4-8)",
     )
     parser.add_argument(
         "--agent-timeout",
         type=float,
-        default=300.0,
+        default=3000000.0,
         help="Timeout in seconds for agent generation (default: 300)",
     )
 

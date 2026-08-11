@@ -544,7 +544,7 @@ async def generate_with_agent(
     prompt: str,
     file_path: str | None = None,
     model: str = "claude-opus-4-8",
-    timeout: float = 3000.0,
+    timeout: float = 3000000.0,
     working_dir: str | None = None,
     sandbox: bool = True,
     sandbox_config: SandboxConfig | None = None,
@@ -1331,7 +1331,7 @@ def _run_agent_in_subprocess(
 
 def create_agent_function(
     model: str = "claude-opus-4-8",
-    timeout: float = 3000.0,
+    timeout: float = 3000000.0,
     sandbox: bool = True,
     sandbox_config: SandboxConfig | None = None,
     isolate_process: bool = True,
@@ -1360,7 +1360,9 @@ def create_agent_function(
     """
 
     async def agent_generate(
-        prompt: Annotated[str, "textarea"] = r"Load the plant volume from tif stack at \"C:\Users\rp\Downloads\rec20201028_190153_esther-singer_wet2_pipette_z50_YESagar_x00y01_8bitcrop-roi.tif\". Subsample it by a factor of 4. Install SAM, then run SAM segmentation to isolate the plant structure and generate a mesh. Then run adaptive remeshing. Submit the final result mesh.",
+        prompt: Annotated[str, "textarea"] = r"Read the tif stacks at ~/Downloads/5dry.tif and ~/Downloads/60dry.tif and slice out a cube of equal length/width/height from the center. Perform threshold using Yen method from skimage, assuming the background is dark. Then use skimage.regionprops to filter out objects smaller than 500 voxels. Use that result to mask the original 'cube' data. Return a 2x2 stack of the raw and masked data. Each dataset should be processed individually.",
+                                             #r"Load the Concrete data volume from the tif slices in \"C:\Users\rp\Downloads\LOAD5_rec20220824_c3_comp_05_y0002_verticalcrop\",downsample by a factor of 2, then threshold each slice at t>190, then use skimage.regionprops to filter out objects smaller than 1000 voxels. Submit the resulting volume data.",
+                                             #r"Load the plant volume from tif stack at \"C:\Users\rp\Downloads\rec20201028_190153_esther-singer_wet2_pipette_z50_YESagar_x00y01_8bitcrop-roi.tif\". Subsample it by a factor of 4. Install SAM, then run SAM segmentation to isolate the plant structure and generate a mesh. Then run adaptive remeshing. Submit the final result mesh.",
                                              #r"Read the tif stacks at ~/Downloads/5dry.tif and ~/Downloads/60dry.tif and slice out a cube of equal length/width/height from the center; that will be the 'raw' data. Treating each dataset individually, perform threshold using Yen method from skimage, assuming the background is dark. Then use skimage.regionprops to filter out objects smaller than 200 voxels. Use that result to mask the original 'cube' data. Return a 2x2 stack of the raw and masked data with a small gap between each.",
                                              #r"Note, this is a dry run. Afterwards, any issues you encounter should be investigated, and the system prompt in agent_generator.py (C:\Users\rp\PycharmProjects\ascribe-link\ascribe_link\agent_generator.py) should be modified to reduce friction in future runs. Do not actually submit the result until you've updated the system prompt.",
         file_path: str = "",

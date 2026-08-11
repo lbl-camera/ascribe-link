@@ -146,8 +146,8 @@ def create_app(
     mesh_functions: dict[str, Callable] | None = None,
     relay_mode: bool = False,
     enable_agent: bool = False,
-    agent_model: str = "claude-sonnet-4-5",
-    agent_timeout: float = 300.0,
+    agent_model: str = "claude-opus-4-8",
+    agent_timeout: float = 300000.0,
 ) -> Litestar:
     """Create and configure the Litestar application.
 
