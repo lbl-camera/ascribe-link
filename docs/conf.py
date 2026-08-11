@@ -54,7 +54,7 @@ html_theme_options = {
     "icon": {
         "repo": "fontawesome/brands/git-alt",
     },
-    "site_url": "https://ascribe-link.readthedocs.io/en/latest/",
+    "site_url": "https://lbl-camera.github.io/ascribe-link/",
     "repo_url": "https://github.com/lbl-camera/ascribe-link",
     "repo_name": "ascribe-link",
     "edit_uri": "blob/master/docs",

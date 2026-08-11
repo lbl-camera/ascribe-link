@@ -41,9 +41,12 @@ pytest
 
 ## Documentation
 
-Full documentation lives in `docs/` and covers the REST API, writing dynamic
-specimens, room caching, the background job flow, the binary envelope wire
-format, federation, and AI agent generation.
+Published at **https://lbl-camera.github.io/ascribe-link/** (once the repo is
+public and Pages is enabled). The sources live in `docs/` and cover the REST
+API, writing dynamic specimens, room caching, the background job flow, the
+binary envelope wire format, federation, and AI agent generation.
+
+To build them locally:
 
 ```bash
 pip install -e ".[docs]"

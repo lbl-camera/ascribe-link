@@ -1,4 +1,4 @@
-name: Docs build
+name: Docs
 
 on:
   push:
@@ -7,6 +7,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -26,10 +30,31 @@ jobs:
       - name: Build HTML docs
         run: sphinx-build -W -b html docs docs/_build/html
 
-      - name: Upload HTML artifact
-        uses: actions/upload-artifact@v4
+      # Sphinx emits _static/ and _sources/; without this GitHub Pages'
+      # Jekyll pass drops every underscore-prefixed directory.
+      - name: Disable Jekyll
+        run: touch docs/_build/html/.nojekyll
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          name: docs-html
           path: docs/_build/html
-          if-no-files-found: error
-          retention-days: 7
+
+  deploy:
+    needs: build
+    # Pages is unavailable on a private repo under this plan. Flip the
+    # PAGES_ENABLED repo variable to 'true' once the repo is public and
+    # Pages is set to "GitHub Actions" — until then the build still runs
+    # and only the deploy is skipped.
+    if: github.ref == 'refs/heads/master' && vars.PAGES_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
