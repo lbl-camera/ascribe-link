@@ -80,10 +80,12 @@ class AgentSessionManager:
 
         # request_id -> (future, tool_name)
         self._pending: dict[str, tuple[asyncio.Future, str]] = {}
-        # room_id -> request_id, set while a capture_viewport call is
-        # waiting on the next screenshot binary frame instead of a
-        # tool_result frame.
-        self._capture_pending: dict[str, str] = {}
+        # room_id -> FIFO queue of request_ids waiting on the next
+        # screenshot binary frame instead of a tool_result frame. A list
+        # (not a single slot) so overlapping capture_viewport calls for the
+        # same room each get resolved by their own successive binary frame,
+        # in request order, instead of clobbering one another.
+        self._capture_pending: dict[str, list[str]] = {}
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -234,9 +236,11 @@ class AgentSessionManager:
             await self._send(socket, protocol.error(f"unknown binary kind '{header.get('kind')}'"))
             return
 
-        request_id = self._capture_pending.get(room_id)
-        if request_id is not None:
-            self._capture_pending.pop(room_id, None)
+        queue = self._capture_pending.get(room_id)
+        if queue:
+            request_id = queue.pop(0)
+            if not queue:
+                self._capture_pending.pop(room_id, None)
             entry = self._pending.pop(request_id, None)
             if entry is not None:
                 future, _name = entry
@@ -286,7 +290,7 @@ class AgentSessionManager:
         future: asyncio.Future = self._main_loop.create_future()
         self._pending[request_id] = (future, name)
         if name == "capture_viewport":
-            self._capture_pending[room_id] = request_id
+            self._capture_pending.setdefault(room_id, []).append(request_id)
 
         room = self._room(room_id)
         executor = 0 if room.sockets else None
@@ -298,7 +302,14 @@ class AgentSessionManager:
             return await asyncio.wait_for(future, TOOL_CALL_TIMEOUT)
         finally:
             self._pending.pop(request_id, None)
-            self._capture_pending.pop(room_id, None)
+            # Only remove this call's own entry from the queue (e.g. on
+            # timeout) -- a concurrent capture_viewport call for the same
+            # room may still be waiting and must not be disturbed.
+            queue = self._capture_pending.get(room_id)
+            if queue is not None and request_id in queue:
+                queue.remove(request_id)
+                if not queue:
+                    self._capture_pending.pop(room_id, None)
 
     # ------------------------------------------------------------------
     # Staged-result store (backs the ConversationSink for `tools.py`)

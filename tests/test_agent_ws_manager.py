@@ -192,6 +192,39 @@ async def test_capture_viewport_resolves_on_binary_screenshot_not_tool_result():
     assert result == payload
 
 
+async def test_overlapping_capture_viewport_requests_both_resolve_in_order():
+    mgr = make_manager()
+    s1 = FakeSocket()
+    await mgr.connect("room1", s1)
+
+    task1 = asyncio.ensure_future(mgr.request_client_tool("room1", "capture_viewport", {}))
+    await asyncio.sleep(0)
+    task2 = asyncio.ensure_future(mgr.request_client_tool("room1", "capture_viewport", {}))
+    await asyncio.sleep(0)
+
+    calls = [f for f in s1.sent if f["type"] == "tool_call"]
+    assert len(calls) == 2
+    assert calls[0]["request_id"] != calls[1]["request_id"]
+
+    from ascribe_link.agent_ws import protocol
+
+    binary1 = protocol.encode_binary({"kind": "screenshot"}, b"first-frame")
+    binary2 = protocol.encode_binary({"kind": "screenshot"}, b"second-frame")
+
+    # First binary frame must resolve the FIRST (oldest) pending capture,
+    # not whichever call happens to be most recently registered.
+    await mgr.handle_binary("room1", s1, binary1)
+    result1 = await asyncio.wait_for(task1, 5.0)
+    assert result1 == b"first-frame"
+    assert not task2.done()
+
+    await mgr.handle_binary("room1", s1, binary2)
+    result2 = await asyncio.wait_for(task2, 5.0)
+    assert result2 == b"second-frame"
+
+    assert mgr._capture_pending.get("room1") in (None, [])
+
+
 async def test_binary_screenshot_without_pending_capture_attaches_image():
     mgr = make_manager()
     s1 = FakeSocket()
