@@ -21,6 +21,7 @@ against fakes.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import threading
 from typing import Any, Awaitable, Callable
@@ -245,10 +246,27 @@ class AgentConversation:
         self._safe_emit(protocol.agent_text_done())
 
     def _build_prompt_blocks(self, turn: _Turn) -> Any:
-        # Simple text prompt for now; image attachment shaping is left to
-        # a later task once the SDK's multimodal content-block contract is
-        # wired through client_factory.
-        return turn.text
+        """Shape one turn for `client.query`.
+
+        Text-only turns stay a plain string (the common case). A turn with an
+        attached screenshot becomes a content-block list, using the same
+        base64 image-block shape `tools.py` returns for `capture_viewport`
+        (tools.py:87-98).
+        """
+        if not turn.image:
+            return turn.text
+
+        return [
+            {"type": "text", "text": turn.text},
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/jpeg",
+                    "data": base64.b64encode(turn.image).decode("ascii"),
+                },
+            },
+        ]
 
     def _emit_events(self, msg: Any) -> list[str | None]:
         """Translate one SDK message into emit() calls.

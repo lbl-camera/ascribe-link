@@ -226,3 +226,53 @@ def test_history_storage_is_capped_at_200(frame_q):
         assert "reply 0" not in texts
     finally:
         convo.stop()
+
+
+def test_attached_image_reaches_query_as_a_content_block(frame_q):
+    """attach_image + submit_text must produce a text+image block list."""
+    import base64
+
+    jpeg = b"\xff\xd8fake-jpeg-bytes"
+    fake = FakeSDKClient()
+    fake.scripted_messages = [text_msg("I see it.")]
+    convo = make_conversation(fake, frame_q)
+    convo.start()
+    try:
+        convo.attach_image(jpeg)
+        convo.submit_text("what is this?")
+        drain(frame_q, 3)  # status, agent_text, agent_text_done
+    finally:
+        convo.stop()
+
+    assert len(fake.queries) == 1
+    prompt = fake.queries[0]
+    assert isinstance(prompt, list)
+    assert {"type": "text", "text": "what is this?"} in prompt
+    images = [b for b in prompt if b.get("type") == "image"]
+    assert len(images) == 1
+    assert images[0]["source"] == {
+        "type": "base64",
+        "media_type": "image/jpeg",
+        "data": base64.b64encode(jpeg).decode("ascii"),
+    }
+
+
+def test_image_is_consumed_by_one_turn_only(frame_q):
+    """The next turn with no attachment goes back to a plain string prompt."""
+    fake = FakeSDKClient()
+    fake.scripted_messages = [text_msg("ok")]
+    convo = make_conversation(fake, frame_q)
+    convo.start()
+    try:
+        convo.attach_image(b"\xff\xd8img")
+        convo.submit_text("first")
+        drain(frame_q, 3)
+
+        fake.scripted_messages = [text_msg("ok again")]
+        convo.submit_text("second")
+        drain(frame_q, 3)
+    finally:
+        convo.stop()
+
+    assert isinstance(fake.queries[0], list)
+    assert fake.queries[1] == "second"
