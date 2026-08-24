@@ -13,6 +13,8 @@ from litestar.di import Provide
 from litestar.openapi import OpenAPIConfig
 from litestar.openapi.plugins import SwaggerRenderPlugin
 
+from ascribe_link.agent_ws.controller import AgentWSController
+from ascribe_link.agent_ws.manager import AgentSessionManager
 from ascribe_link.cache import RoomResultCache
 from ascribe_link.federation import FederationHub
 from ascribe_link.job_registry import JobRegistry
@@ -148,6 +150,8 @@ def create_app(
     enable_agent: bool = False,
     agent_model: str = "claude-opus-4-8",
     agent_timeout: float = 300000.0,
+    *,
+    agent_client_factory: Callable[[], Any] | None = None,
 ) -> Litestar:
     """Create and configure the Litestar application.
 
@@ -168,6 +172,10 @@ def create_app(
         Claude model to use for agent-based generation.
     agent_timeout:
         Timeout in seconds for agent-based generation.
+    agent_client_factory:
+        Test seam: when given, used as the `client_factory` for the
+        `/ws/agent` `AgentSessionManager` instead of a real
+        `claude_agent_sdk.ClaudeSDKClient` factory. Keyword-only.
     """
     # --- Specimen store ---
     if specimens_dir is None:
@@ -254,6 +262,16 @@ def create_app(
     job_registry = JobRegistry(ttl_seconds=300.0)
     logger.info("Job registry enabled (TTL=300s)")
 
+    # --- Agent conversation session manager (persistent /ws/agent rooms) ---
+    agent_session_manager: AgentSessionManager | None = None
+    if enable_agent:
+        agent_session_manager = AgentSessionManager(
+            model=agent_model,
+            client_factory=agent_client_factory,
+            result_cache=result_cache,
+        )
+        logger.info("Agent conversation WebSocket enabled (model=%s)", agent_model)
+
     # --- Dependencies ---
     def provide_specimen_store() -> SpecimenStore:
         return store
@@ -270,10 +288,15 @@ def create_app(
     def provide_job_registry() -> JobRegistry:
         return job_registry
 
+    def provide_agent_session_manager() -> AgentSessionManager | None:
+        return agent_session_manager
+
     # --- Route handlers ---
     route_handlers = [SpecimenController, ProcessingController, JobController]
     if relay_mode:
         route_handlers.append(FederationController)
+    if enable_agent:
+        route_handlers.append(AgentWSController)
 
     # --- Exception handler ---
     # Logs non-HTTP exceptions with a traceback (real runtime errors) and
@@ -325,6 +348,8 @@ def create_app(
                     await task
                 except asyncio.CancelledError:
                     pass
+        if agent_session_manager is not None:
+            await agent_session_manager.shutdown()
 
     app = Litestar(
         route_handlers=route_handlers,
@@ -334,6 +359,7 @@ def create_app(
             "federation_hub": Provide(provide_federation_hub, sync_to_thread=False),
             "result_cache": Provide(provide_result_cache, sync_to_thread=False),
             "job_registry": Provide(provide_job_registry, sync_to_thread=False),
+            "agent_session_manager": Provide(provide_agent_session_manager, sync_to_thread=False),
         },
         cors_config=CORSConfig(allow_origins=["*"]),
         middleware=[_SlowRequestLoggerMiddleware],
@@ -349,5 +375,8 @@ def create_app(
         on_startup=[_start_background_tasks],
         on_shutdown=[_stop_background_tasks],
     )
+    # Exposed for tests that need to drive the manager directly (e.g. to
+    # simulate a server-initiated tool call over a real websocket).
+    app.state.agent_session_manager = agent_session_manager
 
     return app

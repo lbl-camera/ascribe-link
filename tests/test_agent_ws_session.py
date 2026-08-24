@@ -7,57 +7,12 @@ queue.Queue and asserted with timeouts (no sleeps).
 
 import asyncio
 import queue
-from types import SimpleNamespace
 
 import pytest
 
 from ascribe_link.agent_ws.session import AgentConversation
 
-
-class FakeSDKClient:
-    """Async context manager fake standing in for ClaudeSDKClient.
-
-    `scripted_messages` is a list of message objects to yield from
-    `receive_response()` for the *next* query() call. `gate` (an
-    asyncio.Event), if set, is awaited before receive_response() yields
-    anything, so tests can control interleaving without sleeps.
-    """
-
-    def __init__(self):
-        self.enter_count = 0
-        self.exit_count = 0
-        self.queries = []
-        self.scripted_messages = []
-        self.gate = None
-
-    async def __aenter__(self):
-        self.enter_count += 1
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        self.exit_count += 1
-        return False
-
-    async def query(self, prompt_blocks):
-        self.queries.append(prompt_blocks)
-
-    async def receive_response(self):
-        if self.gate is not None:
-            await self.gate.wait()
-        for msg in self.scripted_messages:
-            yield msg
-
-
-def text_msg(text):
-    return SimpleNamespace(content=[SimpleNamespace(text=text, name=None)])
-
-
-def tool_msg(name):
-    return SimpleNamespace(content=[SimpleNamespace(text=None, name=name)])
-
-
-async def fake_request_client_tool(name, args):
-    return {"ok": True}
+from .fake_sdk import FakeSDKClient, fake_request_client_tool, text_msg, tool_msg
 
 
 def make_conversation(fake_client, frame_q, request_client_tool=None):
