@@ -44,7 +44,22 @@ class _Turn:
 
 
 class AgentConversation:
-    """A persistent, room-scoped conversational agent session."""
+    """A persistent, room-scoped conversational agent session.
+
+    ISOLATION TRADE-OFF — read before changing the threading model:
+    This runs the claude_agent_sdk client on a dedicated WORKER THREAD with its
+    own event loop, unlike the one-shot generation path, which deliberately uses
+    a spawned SUBPROCESS (see agent_generator._run_agent_in_subprocess and the
+    rationale documented near agent_generator.py:1225): the SDK's single
+    json.loads per CLI message holds the GIL and was observed to stall the
+    uvicorn event loop for 10+ seconds on large payloads (e.g. mesh dumps).
+    The thread model was accepted here because a persistent session cannot live
+    in a one-shot process, and conversational messages are small — heavy
+    artifacts still flow through the subprocess-isolated job path.
+    IF GIL STALLS REAPPEAR (server unresponsive while the agent streams), the
+    planned revert is a long-lived child process per room bridged by queues;
+    the injectable client_factory is the seam to swap.
+    """
 
     def __init__(
         self,
