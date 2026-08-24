@@ -148,3 +148,94 @@ async def test_agent_disabled_rejects_websocket_connection():
 async def test_specimens_route_unaffected_by_agent_ws(agent_client):
     resp = await agent_client.get("/api/specimens/")
     assert resp.status_code == 200
+
+
+# ----------------------------------------------------------------------
+# Agent-staged specimens are fetchable over the normal data route
+# ----------------------------------------------------------------------
+
+
+async def test_staged_specimen_is_served_by_the_data_route(agent_client):
+    """The seam the client depends on: dispatcher -> specimen_job_done -> GET data.
+
+    An agent-staged specimen has no catalog entry and no params, so the data
+    route must consult the room's staged store first and serve the binary
+    envelope.
+    """
+    import base64
+
+    import numpy as np
+
+    from ascribe_link.agent_ws.manager import _RoomSink
+    from ascribe_link.envelope import ENVELOPE_MEDIA_TYPE, decode_envelope
+    from ascribe_link.models import VolumeResult
+
+    ws = await agent_client.websocket_connect("/ws/agent/testroom")
+    with ws:
+        ws.receive_json()  # history -- the room now exists
+
+        manager = agent_client.app.state.agent_session_manager
+        arr = np.arange(2 * 3 * 4, dtype=np.uint8).reshape(2, 3, 4)
+        volume = VolumeResult(
+            shape=[2, 3, 4],
+            dtype="uint8",
+            data=base64.b64encode(arr.tobytes()).decode("ascii"),
+        )
+        specimen_id = _RoomSink(manager, "testroom").stage_result(volume)
+
+        resp = await agent_client.get(
+            f"/api/specimens/{specimen_id}/data", params={"room_id": "testroom"}
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith(ENVELOPE_MEDIA_TYPE)
+    decoded = decode_envelope(resp.content)
+    assert list(decoded.shape) == [2, 3, 4]
+    assert decoded.dtype == "uint8"
+
+
+async def test_staged_specimen_via_real_submit_volume_tool(agent_client):
+    """Same seam, driven through the actual `submit_volume` MCP tool handler."""
+    import base64
+
+    import numpy as np
+
+    pytest.importorskip("claude_agent_sdk")
+    from ascribe_link.agent_ws.manager import _RoomSink
+    from ascribe_link.agent_ws.tools import build_conversation_tools
+    from ascribe_link.envelope import decode_envelope
+
+    ws = await agent_client.websocket_connect("/ws/agent/toolroom")
+    with ws:
+        ws.receive_json()  # history
+
+        manager = agent_client.app.state.agent_session_manager
+        sink = _RoomSink(manager, "toolroom")
+        server, _allowed = build_conversation_tools(sink)
+        submit_volume = next(t for t in server["_sdk_tools"] if t.name == "submit_volume")
+
+        arr = np.linspace(0, 1, 8, dtype=np.float32).reshape(2, 2, 2)
+        result = await submit_volume.handler(
+            {
+                "shape": [2, 2, 2],
+                "dtype": "float32",
+                "data": base64.b64encode(arr.tobytes()).decode("ascii"),
+            }
+        )
+        text = result["content"][0]["text"]
+        specimen_id = text.split("specimen '")[1].split("'")[0]
+
+        resp = await agent_client.get(
+            f"/api/specimens/{specimen_id}/data", params={"room_id": "toolroom"}
+        )
+
+    assert resp.status_code == 200, resp.text
+    decoded = decode_envelope(resp.content)
+    assert list(decoded.shape) == [2, 2, 2]
+
+
+async def test_unknown_specimen_still_404s_for_a_room_with_no_staging(agent_client):
+    resp = await agent_client.get(
+        "/api/specimens/deadbeef/data", params={"room_id": "testroom"}
+    )
+    assert resp.status_code == 404

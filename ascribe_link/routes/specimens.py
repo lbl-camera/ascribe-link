@@ -236,10 +236,23 @@ class SpecimenController(Controller):
         federation_hub: FederationHub | None = None,
         params: dict[str, Any] | None = None,
         room_id: str = "ascribe",
+        agent_session_manager: Any | None = None,
     ) -> Response | File | dict[str, Any]:
         """Internal implementation for fetching specimen data."""
         if params is None:
             params = {}
+
+        # Agent-staged specimens first: results produced by submit_mesh /
+        # submit_volume during an agent conversation live only in the room's
+        # staged store -- they have no catalog entry and no params, so the
+        # params/params-hash machinery below is deliberately bypassed.
+        if agent_session_manager is not None:
+            staged = agent_session_manager.get_staged_result(room_id, specimen_id)
+            if staged is not None:
+                return Response(
+                    content=await asyncio.to_thread(encode_envelope, staged),
+                    media_type=ENVELOPE_MEDIA_TYPE,
+                )
 
         # Check if this is a federated specimen
         if ":" in specimen_id and federation_hub:
@@ -374,6 +387,7 @@ class SpecimenController(Controller):
         federation_hub: FederationHub | None = None,
         params: str | None = None,
         room_id: str = "ascribe",
+        agent_session_manager: Any | None = None,
     ) -> Response | File | dict[str, Any]:
         """GET handler for specimen data.
 
@@ -405,6 +419,7 @@ class SpecimenController(Controller):
             federation_hub=federation_hub,
             params=parsed_params,
             room_id=room_id,
+            agent_session_manager=agent_session_manager,
         )
 
     @post("/{specimen_id:str}/data")
@@ -416,6 +431,7 @@ class SpecimenController(Controller):
         result_cache: RoomResultCache,
         federation_hub: FederationHub | None = None,
         data: dict[str, Any] | None = None,
+        agent_session_manager: Any | None = None,
     ) -> Response | File | dict[str, Any]:
         """POST handler for specimen data (allows custom parameters for dynamic specimens).
 
@@ -437,6 +453,7 @@ class SpecimenController(Controller):
             federation_hub=federation_hub,
             params=data.get("params", {}),
             room_id=data.get("room_id", "ascribe"),
+            agent_session_manager=agent_session_manager,
         )
 
     @post("/{specimen_id:str}/start", status_code=200)
