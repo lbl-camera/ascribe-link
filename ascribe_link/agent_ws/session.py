@@ -69,6 +69,7 @@ class AgentConversation:
         self._in_flight = 0  # turns submitted but not yet finished (running + waiting)
         self._in_flight_lock = threading.Lock()
         self._history: list[dict] = []
+        self._history_lock = threading.Lock()
         self._current_turn_task: asyncio.Task | None = None
         self._stopped = threading.Event()
         self._started = threading.Event()
@@ -95,7 +96,7 @@ class AgentConversation:
         with self._in_flight_lock:
             position = self._in_flight
             self._in_flight += 1
-        self._history.append({"role": "user", "text": text})
+        self._append_history({"role": "user", "text": text})
 
         loop = self._loop
         queue_ = self._turn_queue
@@ -143,7 +144,31 @@ class AgentConversation:
 
     def history(self) -> list[dict]:
         """Return role/text entries (user + agent), capped to the last 200."""
-        return list(self._history[-_HISTORY_CAP:])
+        with self._history_lock:
+            return list(self._history)
+
+    def _append_history(self, entry: dict) -> None:
+        """Thread-safe append that trims storage to the last _HISTORY_CAP entries."""
+        with self._history_lock:
+            self._history.append(entry)
+            if len(self._history) > _HISTORY_CAP:
+                del self._history[: len(self._history) - _HISTORY_CAP]
+
+    def _safe_emit(self, frame: dict) -> None:
+        """Call self._emit, swallowing and logging any exception it raises.
+
+        An emit failure (e.g. the caller's websocket send path erroring out)
+        must never kill the worker loop/thread -- a subsequent turn should
+        still run to completion.
+        """
+        try:
+            self._emit(frame)
+        except Exception:
+            logger.exception(
+                "emit() raised for frame type '%s' in room %s",
+                frame.get("type"),
+                self.room_id,
+            )
 
     # ------------------------------------------------------------------
     # Worker thread internals
@@ -191,10 +216,10 @@ class AgentConversation:
                     try:
                         await task
                     except asyncio.CancelledError:
-                        self._emit(protocol.status("interrupted"))
+                        self._safe_emit(protocol.status("interrupted"))
                     except Exception as err:  # pragma: no cover - defensive
                         logger.exception("Turn failed in room %s", self.room_id)
-                        self._emit(protocol.error(str(err)))
+                        self._safe_emit(protocol.error(str(err)))
                     finally:
                         self._current_turn_task = None
                         with self._in_flight_lock:
@@ -203,7 +228,7 @@ class AgentConversation:
                 watcher.cancel()
 
     async def _run_turn(self, client: Any, turn: _Turn) -> None:
-        self._emit(protocol.status("thinking"))
+        self._safe_emit(protocol.status("thinking"))
 
         prompt_blocks = self._build_prompt_blocks(turn)
         await client.query(prompt_blocks)
@@ -215,9 +240,9 @@ class AgentConversation:
                     agent_text_parts.append(frame_text)
 
         if agent_text_parts:
-            self._history.append({"role": "agent", "text": "".join(agent_text_parts)})
+            self._append_history({"role": "agent", "text": "".join(agent_text_parts)})
 
-        self._emit(protocol.agent_text_done())
+        self._safe_emit(protocol.agent_text_done())
 
     def _build_prompt_blocks(self, turn: _Turn) -> Any:
         # Simple text prompt for now; image attachment shaping is left to
@@ -244,8 +269,8 @@ class AgentConversation:
             name = getattr(block, "name", None)
             text = getattr(block, "text", None)
             if name:
-                self._emit(protocol.status(f"Using the {name} tool..."))
+                self._safe_emit(protocol.status(f"Using the {name} tool..."))
             elif text:
-                self._emit(protocol.agent_text(text))
+                self._safe_emit(protocol.agent_text(text))
                 texts.append(text)
         return texts

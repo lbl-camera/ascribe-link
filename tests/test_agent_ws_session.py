@@ -207,3 +207,67 @@ def test_history_returns_user_and_agent_entries_in_order(frame_q):
         assert hist[1]["text"] == "Hello!"
     finally:
         convo.stop()
+
+
+def test_emit_failure_does_not_kill_worker(frame_q):
+    """An emit() that raises must not permanently break the session."""
+    fake = FakeSDKClient()
+    fake.scripted_messages = [text_msg("Hello!")]
+
+    def flaky_emit(frame):
+        if frame.get("type") == "status" and frame.get("text") == "thinking":
+            raise RuntimeError("boom: websocket send failed")
+        frame_q.put(frame)
+
+    def factory():
+        return fake
+
+    convo = AgentConversation(
+        room_id="room1",
+        client_factory=factory,
+        emit=flaky_emit,
+        request_client_tool=fake_request_client_tool,
+        model="claude-test",
+    )
+    convo.start()
+    try:
+        # First turn's "thinking" status raises inside emit; the worker must
+        # swallow it and keep going, still emitting agent_text/agent_text_done.
+        convo.submit_text("hi")
+        frames = drain(frame_q, 2)  # agent_text, agent_text_done ("thinking" was swallowed)
+        assert frames[0] == {"type": "agent_text", "text": "Hello!"}
+        assert frames[1] == {"type": "agent_text_done"}
+
+        # A subsequent turn must still complete normally.
+        fake.scripted_messages = [text_msg("Again!")]
+        convo.submit_text("hi again")
+        frames = drain(frame_q, 2)
+        assert frames[0] == {"type": "agent_text", "text": "Again!"}
+        assert frames[1] == {"type": "agent_text_done"}
+    finally:
+        convo.stop()
+
+    assert not convo._thread.is_alive()
+
+
+def test_history_storage_is_capped_at_200(frame_q):
+    fake = FakeSDKClient()
+    convo = make_conversation(fake, frame_q)
+    convo.start()
+    try:
+        for i in range(250):
+            fake.scripted_messages = [text_msg(f"reply {i}")]
+            convo.submit_text(f"msg {i}")
+            drain(frame_q, 3)
+
+        hist = convo.history()
+        assert len(hist) == 200
+        # The oldest 50 pairs' worth of entries should be gone; the tail
+        # should end with the very last turn's user+agent entries.
+        assert hist[-1] == {"role": "agent", "text": "reply 249"}
+        assert hist[-2] == {"role": "user", "text": "msg 249"}
+        texts = [e["text"] for e in hist]
+        assert "msg 0" not in texts
+        assert "reply 0" not in texts
+    finally:
+        convo.stop()
