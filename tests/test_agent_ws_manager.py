@@ -255,3 +255,193 @@ async def test_end_conversation_stops_and_next_text_creates_fresh_session():
     second = FakeConversation.instances[-1]
     assert second is not first
     assert second.submitted == ["hi again"]
+
+
+# ----------------------------------------------------------------------
+# Cross-loop marshalling (the sink is called from the worker thread/loop)
+# ----------------------------------------------------------------------
+
+
+async def test_room_sink_request_client_tool_marshals_across_loops():
+    """`_RoomSink.request_client_tool` must be safe to await on a worker loop.
+
+    Regression: it used to `await manager.request_client_tool(...)` directly,
+    which creates/awaits a main-loop future from a foreign loop and calls
+    `socket.send_json` off-thread -- "attached to a different loop" against
+    the real SDK. The fakes masked it because everything shared one loop.
+    """
+    import threading
+
+    mgr = make_manager()
+    s1 = FakeSocket()
+    await mgr.connect("room1", s1)
+    s1.sent.clear()
+
+    sink = manager_module._RoomSink(mgr, "room1")
+    box: dict = {}
+    done = threading.Event()
+
+    def worker() -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            box["result"] = loop.run_until_complete(
+                sink.request_client_tool("load_specimen", {"specimen_id": "abc"})
+            )
+        except BaseException as err:  # noqa: BLE001 - recorded and re-asserted
+            box["error"] = err
+        finally:
+            loop.close()
+            done.set()
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+
+    # Wait (on the main loop) for the tool_call broadcast to land.
+    for _ in range(200):
+        calls = [f for f in s1.sent if f["type"] == "tool_call"]
+        if calls:
+            break
+        await asyncio.sleep(0.01)
+    assert calls, "sink never produced a tool_call frame"
+
+    await mgr.handle_frame(
+        "room1",
+        s1,
+        {"type": "tool_result", "request_id": calls[0]["request_id"], "result": {"ok": True}},
+    )
+
+    for _ in range(200):
+        if done.is_set():
+            break
+        await asyncio.sleep(0.01)
+    assert done.is_set(), "worker thread never finished"
+    assert "error" not in box, f"sink raised across loops: {box.get('error')!r}"
+    assert box["result"] == {"ok": True}
+
+
+async def test_conversation_receives_the_sink_marshalling_path():
+    """There is exactly ONE marshalling path: the sink's own method."""
+    mgr = make_manager()
+    s1 = FakeSocket()
+    await mgr.connect("room1", s1)
+    convo = FakeConversation.instances[-1]
+    assert isinstance(convo.request_client_tool.__self__, manager_module._RoomSink)
+
+
+# ----------------------------------------------------------------------
+# Executor identity
+# ----------------------------------------------------------------------
+
+
+async def test_executor_is_surviving_clients_id_after_first_disconnects():
+    mgr = make_manager()
+    s0 = FakeSocket()
+    s1 = FakeSocket()
+    await mgr.connect("room1", s0)
+    await mgr.connect("room1", s1)
+    assert s1.sent[0]["client_id"] == 1
+
+    await mgr.disconnect("room1", s0)
+    s1.sent.clear()
+
+    task = asyncio.ensure_future(
+        mgr.request_client_tool("room1", "load_specimen", {"specimen_id": "abc"})
+    )
+    await asyncio.sleep(0)
+
+    call = [f for f in s1.sent if f["type"] == "tool_call"][0]
+    assert call["executor"] == 1  # the survivor's persistent id, not index 0
+
+    await mgr.handle_frame(
+        "room1", s1, {"type": "tool_result", "request_id": call["request_id"], "result": "done"}
+    )
+    assert await asyncio.wait_for(task, 5.0) == "done"
+
+
+async def test_pending_tool_fails_fast_when_executor_disconnects():
+    mgr = make_manager()
+    s0 = FakeSocket()
+    s1 = FakeSocket()
+    await mgr.connect("room1", s0)
+    await mgr.connect("room1", s1)
+
+    task = asyncio.ensure_future(
+        mgr.request_client_tool("room1", "load_specimen", {"specimen_id": "abc"})
+    )
+    await asyncio.sleep(0)
+    assert not task.done()
+
+    await mgr.disconnect("room1", s0)  # the executor leaves
+
+    with pytest.raises(RuntimeError, match="disconnected"):
+        await asyncio.wait_for(task, 1.0)  # well under TOOL_CALL_TIMEOUT (30s)
+    assert mgr._pending == {}
+
+
+async def test_rejoining_client_gets_a_new_unique_id():
+    mgr = make_manager()
+    s0 = FakeSocket()
+    s1 = FakeSocket()
+    await mgr.connect("room1", s0)
+    await mgr.connect("room1", s1)
+    await mgr.disconnect("room1", s0)
+
+    s2 = FakeSocket()
+    await mgr.connect("room1", s2)
+
+    ids = [s.sent[0]["client_id"] for s in (s0, s1, s2)]
+    assert ids == [0, 1, 2]
+    assert len(set(ids)) == 3
+
+
+async def test_capture_pending_is_cleaned_up_on_executor_disconnect():
+    mgr = make_manager()
+    s0 = FakeSocket()
+    await mgr.connect("room1", s0)
+
+    task = asyncio.ensure_future(mgr.request_client_tool("room1", "capture_viewport", {}))
+    await asyncio.sleep(0)
+    assert mgr._capture_pending.get("room1")
+
+    await mgr.disconnect("room1", s0)
+    with pytest.raises(RuntimeError):
+        await asyncio.wait_for(task, 1.0)
+    assert mgr._capture_pending.get("room1") in (None, [])
+
+
+# ----------------------------------------------------------------------
+# Factory failure
+# ----------------------------------------------------------------------
+
+
+async def test_factory_failure_emits_error_frame_instead_of_dropping_socket(monkeypatch):
+    def boom(*a, **kw):
+        raise RuntimeError("no SDK installed")
+
+    mgr = make_manager()
+    s1 = FakeSocket()
+    await mgr.connect("room1", s1)
+    await mgr.handle_frame("room1", s1, {"type": "end_conversation"})
+    monkeypatch.setattr(manager_module, "AgentConversation", boom)
+    s1.sent.clear()
+
+    await mgr.handle_frame("room1", s1, {"type": "text", "text": "hi"})
+
+    errors = [f for f in s1.sent if f["type"] == "error"]
+    assert errors and "no SDK installed" in errors[0]["message"]
+
+
+# ----------------------------------------------------------------------
+# Staged results
+# ----------------------------------------------------------------------
+
+
+async def test_get_staged_result_is_room_scoped():
+    mgr = make_manager()
+    sink = manager_module._RoomSink(mgr, "room1")
+    specimen_id = sink.stage_result("payload")
+
+    assert mgr.get_staged_result("room1", specimen_id) == "payload"
+    assert mgr.get_staged_result("otherroom", specimen_id) is None
+    assert mgr.get_staged_result("room1", "nope") is None

@@ -268,7 +268,6 @@ def create_app(
         agent_session_manager = AgentSessionManager(
             model=agent_model,
             client_factory=agent_client_factory,
-            result_cache=result_cache,
         )
         logger.info("Agent conversation WebSocket enabled (model=%s)", agent_model)
 
