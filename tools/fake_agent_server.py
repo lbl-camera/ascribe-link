@@ -35,8 +35,10 @@ Run: `.venv\\Scripts\\python tools\\fake_agent_server.py`
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -44,8 +46,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
 
 from fake_sdk import FakeSDKClient, ToolTrigger, text_msg  # noqa: E402
+from fake_voice import FakeSTT, FakeTTS  # noqa: E402
 
 from ascribe_link.app import create_app  # noqa: E402
+
+
+class ScriptedFakeSTT(FakeSTT):
+    """Fake STT that always transcribes to "make it darker".
+
+    Drives the existing scripted tool flow (see `ScriptedClient.query` below)
+    end-to-end from voice input, regardless of what audio was actually sent
+    -- there's no real speech recognition here, just enough to exercise the
+    bind -> audio -> transcript -> submit_text -> tool_call -> tts pipeline.
+    """
+
+    def transcribe(self, audio_16k) -> str:
+        return "make it darker"
+
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("fake_agent_server")
@@ -102,9 +119,16 @@ class ScriptedFactory:
         return client
 
 
-def build_app():
+def build_app(voice: bool = False):
     factory = ScriptedFactory()
-    app = create_app(enable_agent=True, agent_client_factory=factory)
+    stt_engine = ScriptedFakeSTT() if voice else None
+    tts_engine = FakeTTS() if voice else None
+    app = create_app(
+        enable_agent=True,
+        agent_client_factory=factory,
+        stt_engine=stt_engine,
+        tts_engine=tts_engine,
+    )
 
     manager = app.state.agent_session_manager
     factory.manager = manager
@@ -130,11 +154,24 @@ def build_app():
     return app
 
 
-app = build_app()
+app = build_app(voice=os.environ.get("FAKE_AGENT_VOICE") == "1")
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    logger.info("Starting fake agent server on http://127.0.0.1:8000 (ws: /ws/agent/{room_id})")
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--port", type=int, default=8000, help="Bind port (default: 8000)")
+    parser.add_argument(
+        "--voice", action="store_true", help="Wire fake STT/TTS engines onto the app"
+    )
+    args = parser.parse_args()
+
+    app = build_app(voice=args.voice)
+
+    logger.info(
+        "Starting fake agent server on http://127.0.0.1:%d (ws: /ws/agent/{room_id}, voice=%s)",
+        args.port,
+        args.voice,
+    )
+    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="info")
