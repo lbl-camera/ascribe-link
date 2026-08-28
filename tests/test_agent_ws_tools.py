@@ -57,11 +57,11 @@ class FakeSink:
         return self.staged.get(specimen_id)
 
 
-async def _call_tool(server, name: str, args: dict) -> dict:
-    # tools.py exposes the raw SdkMcpTool objects it registered on the server
-    # via a private testing seam, since claude_agent_sdk's McpSdkServerConfig
-    # does not itself expose a synchronous tool lookup.
-    tool_objs = server["_sdk_tools"]
+async def _call_tool(tool_objs, name: str, args: dict) -> dict:
+    # build_conversation_tools returns the raw SdkMcpTool list separately so
+    # tests can invoke handlers directly (claude_agent_sdk's McpSdkServerConfig
+    # does not expose a synchronous tool lookup, and stashing them inside the
+    # server dict breaks the SDK's json.dumps of the CLI command).
     for tool_obj in tool_objs:
         if tool_obj.name == name:
             return await tool_obj.handler(args)
@@ -70,7 +70,7 @@ async def _call_tool(server, name: str, args: dict) -> dict:
 
 def test_allowed_tools_has_nine_names():
     sink = FakeSink()
-    server, allowed_tools = ws_tools.build_conversation_tools(sink)
+    server, allowed_tools, sdk_tools = ws_tools.build_conversation_tools(sink)
     assert server["name"] == "scene"
     assert sorted(allowed_tools) == sorted(
         f"mcp__scene__{n}" for n in EXPECTED_TOOL_NAMES
@@ -81,10 +81,10 @@ def test_allowed_tools_has_nine_names():
 def test_set_display_param_forwards_to_client():
     sink = FakeSink()
     sink.request_result = {"status": "ok"}
-    server, _ = ws_tools.build_conversation_tools(sink)
+    server, _, sdk_tools = ws_tools.build_conversation_tools(sink)
 
     result = asyncio.run(
-        _call_tool(server, "set_display_param", {"index": 0, "name": "gamma", "value": 2.0})
+        _call_tool(sdk_tools, "set_display_param", {"index": 0, "name": "gamma", "value": 2.0})
     )
 
     assert sink.requested == [("set_display_param", {"index": 0, "name": "gamma", "value": 2.0})]
@@ -97,9 +97,9 @@ def test_capture_viewport_wraps_bytes_as_image():
     sink = FakeSink()
     jpeg_bytes = b"\xff\xd8\xff\xe0FAKEJPEG"
     sink.request_result = jpeg_bytes
-    server, _ = ws_tools.build_conversation_tools(sink)
+    server, _, sdk_tools = ws_tools.build_conversation_tools(sink)
 
-    result = asyncio.run(_call_tool(server, "capture_viewport", {}))
+    result = asyncio.run(_call_tool(sdk_tools, "capture_viewport", {}))
 
     block = result["content"][0]
     assert block["type"] == "image"
@@ -112,9 +112,9 @@ def test_client_tool_timeout_returns_error_not_exception(monkeypatch):
     monkeypatch.setattr(ws_tools, "CLIENT_TOOL_TIMEOUT", 0.05)
     sink = FakeSink()
     sink.request_delay = 1.0
-    server, _ = ws_tools.build_conversation_tools(sink)
+    server, _, sdk_tools = ws_tools.build_conversation_tools(sink)
 
-    result = asyncio.run(_call_tool(server, "load_specimen", {"specimen_id": "s1"}))
+    result = asyncio.run(_call_tool(sdk_tools, "load_specimen", {"specimen_id": "s1"}))
 
     assert result.get("is_error") is True
     assert "load_specimen" in result["content"][0]["text"]
@@ -124,9 +124,9 @@ def test_client_tool_timeout_returns_error_not_exception(monkeypatch):
 def test_client_tool_exception_returns_error():
     sink = FakeSink()
     sink.request_exc = RuntimeError("boom")
-    server, _ = ws_tools.build_conversation_tools(sink)
+    server, _, sdk_tools = ws_tools.build_conversation_tools(sink)
 
-    result = asyncio.run(_call_tool(server, "set_room_scene", {"name": "lab"}))
+    result = asyncio.run(_call_tool(sdk_tools, "set_room_scene", {"name": "lab"}))
 
     assert result.get("is_error") is True
     assert "boom" in result["content"][0]["text"]
@@ -134,14 +134,14 @@ def test_client_tool_exception_returns_error():
 
 def test_submit_volume_stages_volume_result():
     sink = FakeSink()
-    server, _ = ws_tools.build_conversation_tools(sink)
+    server, _, sdk_tools = ws_tools.build_conversation_tools(sink)
 
     arr = np.arange(4 * 4 * 4, dtype=np.float32).reshape(4, 4, 4)
     data_b64 = base64.b64encode(arr.tobytes()).decode("ascii")
 
     result = asyncio.run(
         _call_tool(
-            server,
+            sdk_tools,
             "submit_volume",
             {"shape": [4, 4, 4], "dtype": "float32", "data": data_b64},
         )
@@ -157,9 +157,9 @@ def test_submit_volume_stages_volume_result():
 
 def test_submit_mesh_invalid_returns_error():
     sink = FakeSink()
-    server, _ = ws_tools.build_conversation_tools(sink)
+    server, _, sdk_tools = ws_tools.build_conversation_tools(sink)
 
-    result = asyncio.run(_call_tool(server, "submit_mesh", {"vertices": [], "indices": []}))
+    result = asyncio.run(_call_tool(sdk_tools, "submit_mesh", {"vertices": [], "indices": []}))
 
     assert "Error" in result["content"][0]["text"]
     assert len(sink.staged) == 0
@@ -167,12 +167,12 @@ def test_submit_mesh_invalid_returns_error():
 
 def test_submit_mesh_stages_mesh_result():
     sink = FakeSink()
-    server, _ = ws_tools.build_conversation_tools(sink)
+    server, _, sdk_tools = ws_tools.build_conversation_tools(sink)
 
     vertices = [[0, 0, 0], [1, 0, 0], [0, 1, 0]]
     indices = [0, 1, 2]
 
-    result = asyncio.run(_call_tool(server, "submit_mesh", {"vertices": vertices, "indices": indices}))
+    result = asyncio.run(_call_tool(sdk_tools, "submit_mesh", {"vertices": vertices, "indices": indices}))
 
     assert len(sink.staged) == 1
     specimen_id, staged = next(iter(sink.staged.items()))
@@ -182,13 +182,13 @@ def test_submit_mesh_stages_mesh_result():
 
 def test_analyze_specimen_volume_stats():
     sink = FakeSink()
-    server, _ = ws_tools.build_conversation_tools(sink)
+    server, _, sdk_tools = ws_tools.build_conversation_tools(sink)
 
     arr = np.arange(4 * 4 * 4, dtype=np.float32).reshape(4, 4, 4)
     vr = VolumeResult.from_numpy(arr)
     specimen_id = sink.stage_result(vr)
 
-    result = asyncio.run(_call_tool(server, "analyze_specimen", {"specimen_id": specimen_id}))
+    result = asyncio.run(_call_tool(sdk_tools, "analyze_specimen", {"specimen_id": specimen_id}))
 
     text = result["content"][0]["text"]
     assert "[4, 4, 4]" in text or "4, 4, 4" in text
@@ -200,9 +200,22 @@ def test_analyze_specimen_volume_stats():
 
 def test_analyze_specimen_unknown_id_errors():
     sink = FakeSink()
-    server, _ = ws_tools.build_conversation_tools(sink)
+    server, _, sdk_tools = ws_tools.build_conversation_tools(sink)
 
-    result = asyncio.run(_call_tool(server, "analyze_specimen", {"specimen_id": "nope"}))
+    result = asyncio.run(_call_tool(sdk_tools, "analyze_specimen", {"specimen_id": "nope"}))
 
     assert result.get("is_error") is True
     assert "nope" in result["content"][0]["text"]
+
+
+def test_server_config_is_json_serializable_for_the_cli():
+    """Regression: the SDK json.dumps-es the server config verbatim when
+    building the CLI command (subprocess_cli._build_command); any non-JSON
+    value we stash in it crashes ClaudeSDKClient.connect() with the real SDK
+    (TypeError: Object of type SdkMcpTool is not JSON serializable)."""
+    import json
+
+    server, _, _ = ws_tools.build_conversation_tools(FakeSink())
+    serializable = {k: v for k, v in server.items() if k != "instance"}
+    json.dumps({"mcpServers": {"scene": serializable}})  # must not raise
+    assert "_sdk_tools" not in server

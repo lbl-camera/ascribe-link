@@ -132,15 +132,20 @@ def _analyze_mesh(mr: Any) -> str:
     )
 
 
-def build_conversation_tools(sink: ConversationSink) -> tuple[dict, list[str]]:
+def build_conversation_tools(sink: ConversationSink) -> tuple[dict, list[str], list]:
     """Build the "scene" MCP server + allowed_tools list for one conversation.
 
     Returns
     -------
-    tuple[dict, list[str]]
-        (server, allowed_tools) -- `server` is the `McpSdkServerConfig` dict
-        from `create_sdk_mcp_server`, ready for `ClaudeAgentOptions.mcp_servers`.
-        `allowed_tools` is `["mcp__scene__" + name, ...]` for all nine tools.
+    tuple[dict, list[str], list]
+        (server, allowed_tools, sdk_tools) -- `server` is the
+        `McpSdkServerConfig` dict from `create_sdk_mcp_server`, ready for
+        `ClaudeAgentOptions.mcp_servers`. `allowed_tools` is
+        `["mcp__scene__" + name, ...]` for all nine tools. `sdk_tools` is the
+        raw `SdkMcpTool` list, returned separately so tests can invoke
+        handlers directly -- it MUST NOT be stored inside `server`: the SDK
+        json.dumps-es that dict verbatim when building the CLI command, and
+        any non-JSON value in it crashes `ClaudeSDKClient.connect()`.
     """
     from claude_agent_sdk import create_sdk_mcp_server, tool
 
@@ -368,10 +373,6 @@ def build_conversation_tools(sink: ConversationSink) -> tuple[dict, list[str]]:
         sdk_tools.append(tool(name, description, schema)(_client_forward(sink, name)))
 
     server = create_sdk_mcp_server(name="scene", version="1.0.0", tools=sdk_tools)
-    # Testing seam: claude_agent_sdk's McpSdkServerConfig doesn't expose a
-    # synchronous way to look up a registered tool's handler, and tests need
-    # to invoke handlers directly without spinning up an MCP session.
-    server["_sdk_tools"] = sdk_tools
 
     allowed_tools = [f"mcp__scene__{t.name}" for t in sdk_tools]
-    return server, allowed_tools
+    return server, allowed_tools, sdk_tools

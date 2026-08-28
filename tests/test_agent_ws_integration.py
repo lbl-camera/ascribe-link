@@ -211,8 +211,8 @@ async def test_staged_specimen_via_real_submit_volume_tool(agent_client):
 
         manager = agent_client.app.state.agent_session_manager
         sink = _RoomSink(manager, "toolroom")
-        server, _allowed = build_conversation_tools(sink)
-        submit_volume = next(t for t in server["_sdk_tools"] if t.name == "submit_volume")
+        server, _allowed, sdk_tools = build_conversation_tools(sink)
+        submit_volume = next(t for t in sdk_tools if t.name == "submit_volume")
 
         arr = np.linspace(0, 1, 8, dtype=np.float32).reshape(2, 2, 2)
         result = await submit_volume.handler(

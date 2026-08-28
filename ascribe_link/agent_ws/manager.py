@@ -206,7 +206,7 @@ class AgentSessionManager:
 
             from ascribe_link.agent_ws.tools import build_conversation_tools
 
-            server, allowed_tools = build_conversation_tools(sink)
+            server, allowed_tools, _sdk_tools = build_conversation_tools(sink)
             options = ClaudeAgentOptions(
                 model=self.model,
                 mcp_servers={"scene": server},
