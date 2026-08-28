@@ -70,6 +70,7 @@ class AgentConversation:
         request_client_tool: Callable[[str, dict], Awaitable[Any]],
         model: str,
         system_prompt: str | None = None,
+        on_text_delta: Callable[[str], None] | None = None,
     ) -> None:
         self.room_id = room_id
         self._client_factory = client_factory
@@ -77,6 +78,7 @@ class AgentConversation:
         self._request_client_tool = request_client_tool
         self.model = model
         self.system_prompt = system_prompt
+        self._on_text_delta = on_text_delta
 
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -185,6 +187,19 @@ class AgentConversation:
                 frame.get("type"),
                 self.room_id,
             )
+
+    def _safe_text_delta(self, text: str) -> None:
+        """Call self._on_text_delta, swallowing and logging any exception it raises.
+
+        Mirrors `_safe_emit`'s guard: a failure in the TTS-chunker hookup must
+        never kill the worker loop/thread.
+        """
+        if self._on_text_delta is None:
+            return
+        try:
+            self._on_text_delta(text)
+        except Exception:
+            logger.exception("on_text_delta() raised in room %s", self.room_id)
 
     # ------------------------------------------------------------------
     # Worker thread internals
@@ -304,6 +319,7 @@ class AgentConversation:
             if name:
                 self._safe_emit(protocol.status(f"Using the {name} tool..."))
             elif text:
+                self._safe_text_delta(text)
                 self._safe_emit(protocol.agent_text(text))
                 texts.append(text)
         return texts

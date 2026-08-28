@@ -73,6 +73,23 @@ def main() -> None:
         help="Timeout in seconds for agent generation (default: 300)",
     )
 
+    # Voice (STT/TTS) options
+    parser.add_argument(
+        "--voice",
+        action="store_true",
+        help="Enable voice conversation on /ws/agent (requires 'pip install -e .[voice]')",
+    )
+    parser.add_argument(
+        "--stt-model",
+        default="small",
+        help="faster-whisper model size for speech-to-text (default: small)",
+    )
+    parser.add_argument(
+        "--tts-voice",
+        default="af_heart",
+        help="kokoro-onnx voice name for text-to-speech (default: af_heart)",
+    )
+
     args = parser.parse_args()
 
     # Configure logging
@@ -134,12 +151,43 @@ def run_server_mode(args: argparse.Namespace) -> None:
         args.specimens_dir = repo_root / "specimens"
         logging.info(f"Using default specimens directory: {args.specimens_dir}")
 
+    stt_engine = None
+    tts_engine = None
+    if args.enable_agent and args.voice:
+        try:
+            # Probe the optional deps eagerly so a missing `voice` extra is
+            # reported clearly at startup rather than surfacing later as an
+            # opaque failure the first time a client speaks -- the engine
+            # classes themselves import these lazily (see agent_ws/stt.py,
+            # agent_ws/tts.py), so constructing them wouldn't fail here.
+            import faster_whisper  # noqa: F401
+            import kokoro_onnx  # noqa: F401
+
+            from ascribe_link.agent_ws.stt import FasterWhisperSTT
+            from ascribe_link.agent_ws.tts import KokoroTTS
+
+            stt_engine = FasterWhisperSTT(model_size=args.stt_model)
+            tts_engine = KokoroTTS(voice=args.tts_voice)
+            logging.info(
+                "Voice enabled (stt_model=%s, tts_voice=%s)", args.stt_model, args.tts_voice
+            )
+        except ImportError as err:
+            logging.warning(
+                "Voice disabled: voice extras not installed. Run "
+                "'pip install -e .[voice]' to enable speech-to-text/text-to-speech (%s)",
+                err,
+            )
+            stt_engine = None
+            tts_engine = None
+
     app = create_app(
         specimens_dir=args.specimens_dir,
         relay_mode=args.relay,
         enable_agent=args.enable_agent,
         agent_model=args.agent_model,
         agent_timeout=args.agent_timeout,
+        stt_engine=stt_engine,
+        tts_engine=tts_engine,
     )
     # log_config=None: don't let uvicorn install its own synchronous console
     # handlers — its loggers then propagate to the root logger, whose output

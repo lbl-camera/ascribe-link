@@ -152,6 +152,8 @@ def create_app(
     agent_timeout: float = 300000.0,
     *,
     agent_client_factory: Callable[[], Any] | None = None,
+    stt_engine: Any | None = None,
+    tts_engine: Any | None = None,
 ) -> Litestar:
     """Create and configure the Litestar application.
 
@@ -176,6 +178,13 @@ def create_app(
         Test seam: when given, used as the `client_factory` for the
         `/ws/agent` `AgentSessionManager` instead of a real
         `claude_agent_sdk.ClaudeSDKClient` factory. Keyword-only.
+    stt_engine:
+        Injectable `STTEngine` (see `agent_ws.stt`) for the `/ws/agent` voice
+        pipeline. None (the default) leaves voice disabled: `bind`/`audio`
+        frames are answered with an error; text/tool paths are unaffected.
+    tts_engine:
+        Injectable `TTSEngine` (see `agent_ws.tts`) for the `/ws/agent` voice
+        pipeline. See `stt_engine`.
     """
     # --- Specimen store ---
     if specimens_dir is None:
@@ -268,8 +277,13 @@ def create_app(
         agent_session_manager = AgentSessionManager(
             model=agent_model,
             client_factory=agent_client_factory,
+            stt=stt_engine,
+            tts=tts_engine,
         )
-        logger.info("Agent conversation WebSocket enabled (model=%s)", agent_model)
+        voice_status = "enabled" if (stt_engine is not None and tts_engine is not None) else "disabled"
+        logger.info(
+            "Agent conversation WebSocket enabled (model=%s, voice=%s)", agent_model, voice_status
+        )
 
     # --- Dependencies ---
     def provide_specimen_store() -> SpecimenStore:

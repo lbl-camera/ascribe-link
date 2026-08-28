@@ -25,12 +25,21 @@ import logging
 import uuid
 from typing import Any
 
-from ascribe_link.agent_ws import protocol
+import numpy as np
+
+from ascribe_link.agent_ws import audio, protocol
 from ascribe_link.agent_ws.session import AgentConversation
+from ascribe_link.agent_ws.stt import STTEngine, UtteranceBuffer
+from ascribe_link.agent_ws.tts import SentenceChunker, TTSEngine
 
 logger = logging.getLogger(__name__)
 
 TOOL_CALL_TIMEOUT = 30.0
+
+# Sentinel queued onto a room's TTS queue to mark "end of this turn" -- the
+# drain task broadcasts agent_audio_end() when it dequeues this instead of a
+# sentence string.
+_END_TURN = object()
 
 
 class _RoomSink:
@@ -67,7 +76,22 @@ class _RoomSink:
 class _RoomState:
     """Per-room bookkeeping: sockets, client ids, the conversation, staged results."""
 
-    __slots__ = ("sockets", "conversation", "staged", "client_ids", "next_client_id")
+    __slots__ = (
+        "sockets",
+        "conversation",
+        "staged",
+        "client_ids",
+        "next_client_id",
+        # Voice floor control / utterance pipeline.
+        "speaker",
+        "utterance_buffer",
+        # TTS fan-out.
+        "chunker",
+        "tts_queue",
+        "tts_task",
+        "tts_seq",
+        "speaking",
+    )
 
     def __init__(self) -> None:
         self.sockets: list[Any] = []
@@ -78,6 +102,20 @@ class _RoomState:
         self.client_ids: dict[Any, int] = {}
         self.next_client_id: int = 0
 
+        # The socket currently holding the speaker floor (exclusive per room).
+        self.speaker: Any = None
+        self.utterance_buffer: UtteranceBuffer | None = None
+
+        # Sentence-level chunker feeding the per-room TTS drain task.
+        self.chunker: SentenceChunker | None = None
+        self.tts_queue: asyncio.Queue | None = None
+        self.tts_task: asyncio.Task | None = None
+        self.tts_seq: int = 0
+        # True while the agent's TTS reply for the current turn is still
+        # in flight (sentences queued/synthesizing, agent_audio_end not
+        # yet sent) -- drives the barge-in decision on `bind`.
+        self.speaking: bool = False
+
 
 class AgentSessionManager:
     """Room -> (sockets, AgentConversation) registry with tool correlation."""
@@ -87,9 +125,13 @@ class AgentSessionManager:
         *,
         model: str,
         client_factory=None,
+        stt: STTEngine | None = None,
+        tts: TTSEngine | None = None,
     ) -> None:
         self.model = model
         self._client_factory = client_factory
+        self.stt = stt
+        self.tts = tts
 
         self._rooms: dict[str, _RoomState] = {}
         self._main_loop: asyncio.AbstractEventLoop | None = None
@@ -138,14 +180,20 @@ class AgentSessionManager:
         room = self._rooms.get(room_id)
         if room is None:
             return
+        if room.speaker is socket:
+            # The speaker's disconnect behaves like unbind: finalize a
+            # non-trivial buffered utterance, otherwise just release the floor.
+            await self._finalize_or_release(room, room_id, socket)
         if socket in room.sockets:
             room.sockets.remove(socket)
         client_id = room.client_ids.pop(socket, None)
         if client_id is not None:
             self._fail_pending_for_executor(room_id, client_id)
 
-    def _drop_socket(self, room: _RoomState, socket: Any, room_id: str) -> None:
+    async def _drop_socket(self, room: _RoomState, socket: Any, room_id: str) -> None:
         """Remove a socket that failed to send (broadcast pruning path)."""
+        if room.speaker is socket:
+            await self._finalize_or_release(room, room_id, socket)
         if socket in room.sockets:
             room.sockets.remove(socket)
         client_id = room.client_ids.pop(socket, None)
@@ -181,7 +229,20 @@ class AgentSessionManager:
             loop = self._main_loop
             if loop is None:
                 return
-            asyncio.run_coroutine_threadsafe(self.broadcast(room_id, frame), loop)
+
+            async def _handle() -> None:
+                await self.broadcast(room_id, frame)
+                if frame.get("type") == "agent_text_done":
+                    await self._finish_tts_turn(room_id)
+
+            asyncio.run_coroutine_threadsafe(_handle(), loop)
+
+        def on_text_delta(text: str) -> None:
+            # Also called from the conversation's worker thread.
+            loop = self._main_loop
+            if loop is None:
+                return
+            asyncio.run_coroutine_threadsafe(self._handle_text_delta(room_id, text), loop)
 
         client_factory = self._client_factory
         if client_factory is None:
@@ -194,6 +255,7 @@ class AgentSessionManager:
             # The sink is the single marshalling path onto the main loop.
             request_client_tool=sink.request_client_tool,
             model=self.model,
+            on_text_delta=on_text_delta if self.tts is not None else None,
         )
         conversation.start()
         return conversation
@@ -260,6 +322,33 @@ class AgentSessionManager:
                 room.conversation.stop()
                 room.conversation = None
 
+        elif frame_type == "bind":
+            if self.stt is None or self.tts is None:
+                await self._send(socket, protocol.error("voice is not enabled on this server"))
+                return
+            if room.speaker is not None and room.speaker is not socket:
+                await self._send(socket, protocol.error("speaker slot is held"))
+                return
+            if room.speaking:
+                # Barge-in: cancel TTS + clear its queue FIRST, then
+                # interrupt the running turn, then tell clients the audio
+                # stopped, and only then grant the floor.
+                await self._cancel_tts(room, room_id)
+                if room.conversation is not None:
+                    room.conversation.interrupt()
+                await self.broadcast(room_id, protocol.agent_audio_end())
+            room.speaker = socket
+            room.utterance_buffer = UtteranceBuffer()
+            client_id = room.client_ids.get(socket)
+            await self.broadcast(room_id, protocol.speaker_bound(client_id))
+
+        elif frame_type == "unbind":
+            if self.stt is None or self.tts is None:
+                await self._send(socket, protocol.error("voice is not enabled on this server"))
+                return
+            if room.speaker is socket:
+                await self._finalize_or_release(room, room_id, socket)
+
     def _resolve_tool_result(self, request_id: str, result: Any) -> None:
         entry = self._pending.get(request_id)
         if entry is None:
@@ -281,8 +370,14 @@ class AgentSessionManager:
             await self._send(socket, protocol.error(str(err)))
             return
 
-        if header.get("kind") != "screenshot":
-            await self._send(socket, protocol.error(f"unknown binary kind '{header.get('kind')}'"))
+        kind = header.get("kind")
+
+        if kind == "audio":
+            await self._handle_audio_binary(room_id, socket, header, payload)
+            return
+
+        if kind != "screenshot":
+            await self._send(socket, protocol.error(f"unknown binary kind '{kind}'"))
             return
 
         queue = self._capture_pending.get(room_id)
@@ -302,6 +397,170 @@ class AgentSessionManager:
             room.conversation.attach_image(payload)
 
     # ------------------------------------------------------------------
+    # Voice: floor control + utterance pipeline
+    # ------------------------------------------------------------------
+
+    async def _handle_audio_binary(
+        self, room_id: str, socket: Any, header: dict, payload: bytes
+    ) -> None:
+        if self.stt is None or self.tts is None:
+            await self._send(socket, protocol.error("voice is not enabled on this server"))
+            return
+
+        room = self._room(room_id)
+        if room.speaker is not socket:
+            await self._send(socket, protocol.error("you do not hold the speaker floor"))
+            return
+
+        if room.utterance_buffer is None:
+            room.utterance_buffer = UtteranceBuffer()
+        room.utterance_buffer.add(payload, header.get("rate", 48000))
+
+        if room.utterance_buffer.should_finalize():
+            await self._finalize_utterance(room, room_id, socket)
+
+    async def _finalize_utterance(self, room: _RoomState, room_id: str, socket: Any) -> None:
+        """Transcribe the buffered utterance, release the floor, submit the turn."""
+        buffer = room.utterance_buffer
+        room.utterance_buffer = None
+        audio_16k = buffer.take() if buffer is not None else np.array([], dtype=np.float32)
+
+        text = await asyncio.to_thread(self.stt.transcribe, audio_16k)
+        text = (text or "").strip()
+
+        client_id = room.client_ids.get(socket)
+        if not text:
+            await self._send(socket, protocol.status("(silence)"))
+            await self._release_speaker(room, room_id, socket)
+            return
+
+        await self.broadcast(room_id, protocol.transcript(text, client_id))
+        await self._release_speaker(room, room_id, socket)
+
+        try:
+            if room.conversation is None:
+                room.conversation = self._start_conversation(room_id)
+            position = room.conversation.submit_text(text)
+        except Exception as err:  # noqa: BLE001 - surface, don't drop the socket
+            logger.exception("Failed to start/submit conversation in room %s", room_id)
+            room.conversation = None
+            await self._send(socket, protocol.error(f"agent session failed: {err}"))
+            return
+        if position > 0:
+            await self._send(socket, protocol.turn_queued(position))
+
+    async def _release_speaker(self, room: _RoomState, room_id: str, socket: Any) -> None:
+        if room.speaker is not socket:
+            return
+        room.speaker = None
+        room.utterance_buffer = None
+        await self.broadcast(room_id, protocol.speaker_released())
+
+    async def _finalize_or_release(self, room: _RoomState, room_id: str, socket: Any) -> None:
+        """`unbind` (or the speaker's disconnect): finalize a non-trivial buffer, else just release."""
+        buffer = room.utterance_buffer
+        if buffer is not None and buffer.duration_s >= 0.5:
+            await self._finalize_utterance(room, room_id, socket)
+        else:
+            await self._release_speaker(room, room_id, socket)
+
+    # ------------------------------------------------------------------
+    # Voice: TTS fan-out
+    # ------------------------------------------------------------------
+
+    async def _handle_text_delta(self, room_id: str, text: str) -> None:
+        if self.tts is None:
+            return
+        room = self._room(room_id)
+        if room.chunker is None:
+            room.chunker = SentenceChunker()
+        sentences = room.chunker.feed(text)
+        if not sentences:
+            return
+        room.speaking = True
+        self._ensure_tts_task(room, room_id)
+        for sentence in sentences:
+            room.tts_queue.put_nowait(sentence)
+
+    async def _finish_tts_turn(self, room_id: str) -> None:
+        """Called when the conversation emits agent_text_done.
+
+        Flushes the chunker's trailing fragment, queues it, and queues the
+        end-of-turn sentinel so the drain task broadcasts agent_audio_end
+        only after every sentence for this turn has been synthesized.
+        """
+        if self.tts is None:
+            return
+        room = self._room(room_id)
+        remainder = room.chunker.flush() if room.chunker is not None else ""
+        self._ensure_tts_task(room, room_id)
+        if remainder:
+            room.speaking = True
+            room.tts_queue.put_nowait(remainder)
+        room.tts_queue.put_nowait(_END_TURN)
+
+    def _ensure_tts_task(self, room: _RoomState, room_id: str) -> None:
+        if room.tts_task is not None and not room.tts_task.done():
+            return
+        room.tts_queue = asyncio.Queue()
+        room.tts_seq = 0
+        room.tts_task = asyncio.ensure_future(self._drain_tts(room, room_id, room.tts_queue))
+
+    async def _cancel_tts(self, room: _RoomState, room_id: str) -> None:
+        """Barge-in: cancel the drain task and drop its queue."""
+        task = room.tts_task
+        room.tts_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # noqa: BLE001 - the task's own error is irrelevant here
+                logger.exception("TTS drain task raised during cancellation in room %s", room_id)
+        room.tts_queue = None
+        room.tts_seq = 0
+        room.speaking = False
+        if room.chunker is not None:
+            # Reset so stale sentence fragments don't leak into the next turn.
+            room.chunker = SentenceChunker()
+
+    async def _drain_tts(
+        self, room: _RoomState, room_id: str, queue: asyncio.Queue
+    ) -> None:
+        while True:
+            item = await queue.get()
+            if item is _END_TURN:
+                room.speaking = False
+                room.tts_seq = 0
+                await self.broadcast(room_id, protocol.agent_audio_end())
+                continue
+            try:
+                pcm = await asyncio.to_thread(self.tts.synthesize, item)
+            except Exception:  # noqa: BLE001 - one bad sentence must not kill the drain loop
+                logger.exception("TTS synthesis failed in room %s", room_id)
+                continue
+            seq = room.tts_seq
+            room.tts_seq += 1
+            payload = protocol.encode_binary(
+                protocol.tts_header(seq), audio.float32_to_pcm16(pcm)
+            )
+            await self._broadcast_binary(room_id, payload)
+
+    async def _broadcast_binary(self, room_id: str, data: bytes) -> None:
+        room = self._rooms.get(room_id)
+        if room is None:
+            return
+        dead: list[Any] = []
+        for socket in list(room.sockets):
+            try:
+                await socket.send_bytes(data)
+            except Exception:
+                dead.append(socket)
+        for socket in dead:
+            await self._drop_socket(room, socket, room_id)
+
+    # ------------------------------------------------------------------
     # Broadcast
     # ------------------------------------------------------------------
 
@@ -317,7 +576,7 @@ class AgentSessionManager:
             except Exception:
                 dead.append(socket)
         for socket in dead:
-            self._drop_socket(room, socket, room_id)
+            await self._drop_socket(room, socket, room_id)
 
     async def _send(self, socket: Any, frame: dict) -> None:
         try:
