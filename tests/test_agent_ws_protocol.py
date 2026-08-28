@@ -48,3 +48,23 @@ def test_binary_roundtrip():
 def test_binary_truncated_raises():
     with pytest.raises(ValueError):
         p.decode_binary(b"\x00")
+
+
+def test_bind_unbind_are_now_valid():
+    assert p.validate_client_frame({"type": "bind"}) == ""
+    assert p.validate_client_frame({"type": "unbind"}) == ""
+
+
+def test_text_audio_frame_still_rejected():
+    assert "reserved" in p.validate_client_frame({"type": "audio"})
+
+
+def test_voice_builders():
+    assert p.speaker_bound(3) == {"type": "speaker_bound", "client_id": 3}
+    assert p.speaker_released() == {"type": "speaker_released"}
+    assert p.transcript("hello", 2) == {
+        "type": "transcript", "text": "hello", "client_id": 2, "final": True}
+    assert p.agent_audio_end() == {"type": "agent_audio_end"}
+    assert p.audio_header(44100) == {
+        "kind": "audio", "rate": 44100, "format": "s16le", "channels": 1}
+    assert p.tts_header(7)["seq"] == 7 and p.tts_header(7)["rate"] == 24000

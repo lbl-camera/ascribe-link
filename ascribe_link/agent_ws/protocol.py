@@ -10,13 +10,13 @@ import json
 import struct
 
 CLIENT_TYPES = {"text", "tool_result", "screenshot_meta", "interrupt",
-                "end_conversation"}
-RESERVED_TYPES = {"bind", "unbind", "audio"}
+                "end_conversation", "bind", "unbind"}
+RESERVED_TYPES = {"audio"}
 
 SERVER_TYPES = {"agent_text", "agent_text_done", "tool_call", "status",
-                "error", "history", "turn_queued"}
-RESERVED_SERVER_TYPES = {"speaker_bound", "speaker_released", "agent_audio",
-                         "transcript"}
+                "error", "history", "turn_queued", "speaker_bound",
+                "speaker_released", "transcript", "agent_audio_end"}
+RESERVED_SERVER_TYPES = {"agent_audio"}
 
 
 def validate_client_frame(frame: dict) -> str:
@@ -35,7 +35,7 @@ def validate_client_frame(frame: dict) -> str:
     if not isinstance(frame_type, str):
         return "type must be a string"
 
-    # Check reserved types first
+    # Check reserved types (audio is only allowed as binary, not text)
     if frame_type in RESERVED_TYPES:
         return f"type '{frame_type}' is reserved for the voice phase"
 
@@ -55,7 +55,7 @@ def validate_client_frame(frame: dict) -> str:
         if "result" not in frame:
             return "tool_result frame requires 'result' field"
 
-    elif frame_type in ("interrupt", "end_conversation"):
+    elif frame_type in ("interrupt", "end_conversation", "bind", "unbind"):
         # No extra fields required
         pass
 
@@ -100,6 +100,36 @@ def history(entries: list[dict]) -> dict:
 def turn_queued(position: int) -> dict:
     """Build a turn_queued frame."""
     return {"type": "turn_queued", "position": position}
+
+
+def speaker_bound(client_id: int) -> dict:
+    """Build a speaker_bound frame."""
+    return {"type": "speaker_bound", "client_id": client_id}
+
+
+def speaker_released() -> dict:
+    """Build a speaker_released frame."""
+    return {"type": "speaker_released"}
+
+
+def transcript(text: str, client_id: int) -> dict:
+    """Build a transcript frame."""
+    return {"type": "transcript", "text": text, "client_id": client_id, "final": True}
+
+
+def agent_audio_end() -> dict:
+    """Build an agent_audio_end frame."""
+    return {"type": "agent_audio_end"}
+
+
+def audio_header(rate: int) -> dict:
+    """Build an audio header for binary frames."""
+    return {"kind": "audio", "rate": rate, "format": "s16le", "channels": 1}
+
+
+def tts_header(seq: int) -> dict:
+    """Build a TTS header for binary frames."""
+    return {"kind": "tts", "rate": 24000, "format": "s16le", "channels": 1, "seq": seq}
 
 
 def encode_binary(header: dict, payload: bytes) -> bytes:
