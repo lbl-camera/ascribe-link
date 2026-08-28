@@ -38,6 +38,11 @@ dependencies = [
 agent = [
     "claude-agent-sdk>=0.1.0",
 ]
+voice = [
+    "faster-whisper>=1.1",
+    "kokoro-onnx>=0.4",
+    "onnxruntime>=1.20",
+]
 test = [
     "pytest>=6.2",
     "pytest-asyncio>=0.21",
