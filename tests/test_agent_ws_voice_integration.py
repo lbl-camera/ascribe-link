@@ -214,6 +214,8 @@ async def test_tts_fanout_ordered_and_ends_after_agent_text_done(voice_client, a
         json_types = [f for kind, f in frames if kind == "json"]
         type_order = [f["type"] for f in json_types]
         assert type_order.index("agent_text_done") < type_order.index("agent_audio_end")
+        end_frame = [f for f in json_types if f["type"] == "agent_audio_end"][0]
+        assert end_frame["interrupted"] is False
 
 
 # ----------------------------------------------------------------------
@@ -266,6 +268,8 @@ async def test_bind_during_tts_barges_in(agent_factory):
                     )
                     bound_frame = [f for f in types_in_order if f["type"] == "speaker_bound"][0]
                     assert bound_frame["client_id"] == h2["client_id"]
+                    end_frame = [f for f in types_in_order if f["type"] == "agent_audio_end"][0]
+                    assert end_frame["interrupted"] is True
     finally:
         gate.set()
 
@@ -317,6 +321,8 @@ async def test_typed_interrupt_mid_tts_ends_audio(agent_factory):
                 after = _drain_until_json(ws, "agent_text")
                 assert not [p for kind, p in after if kind == "binary"], after
                 assert frames
+                end_frame = [f for kind, f in frames if kind == "json" and f["type"] == "agent_audio_end"][0]
+                assert end_frame["interrupted"] is True
     finally:
         gate.set()
 

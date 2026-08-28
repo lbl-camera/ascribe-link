@@ -533,6 +533,8 @@ async def test_no_stale_tts_frames_after_barge_in(monkeypatch):
     assert audio_end_positions, s1.events
     after = s1.events[audio_end_positions[0] + 1 :]
     assert not any(kind == "binary" for kind, _ in after), s1.events
+    _, end_frame = s1.events[audio_end_positions[0]]
+    assert end_frame["interrupted"] is True
 
 
 async def test_bind_interrupts_during_unterminated_stream():
@@ -557,6 +559,8 @@ async def test_bind_interrupts_during_unterminated_stream():
     types = [f["type"] for f in s1.sent]
     assert "agent_audio_end" in types
     assert "speaker_bound" in types
+    end_frame = [f for f in s1.sent if f["type"] == "agent_audio_end"][0]
+    assert end_frame["interrupted"] is True
     assert not any(kind == "binary" for kind, _ in s1.events)  # nothing was ever synthesized
     assert room.speaking is False
 

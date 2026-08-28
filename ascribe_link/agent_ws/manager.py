@@ -577,7 +577,7 @@ class AgentSessionManager:
                 room.conversation.interrupt()
         finally:
             room.barging_in = False
-        await self.broadcast(room_id, protocol.agent_audio_end())
+        await self.broadcast(room_id, protocol.agent_audio_end(interrupted=True))
 
     async def _cleanup_after_interrupt(self, room_id: str) -> None:
         """Idempotent TTS teardown for a turn that ended via cancellation."""
@@ -590,7 +590,7 @@ class AgentSessionManager:
         if room.tts_task is None and not room.speaking:
             return
         await self._cancel_tts(room, room_id)
-        await self.broadcast(room_id, protocol.agent_audio_end())
+        await self.broadcast(room_id, protocol.agent_audio_end(interrupted=True))
 
     async def _handle_text_delta(self, room_id: str, text: str) -> None:
         if self.tts is None:
@@ -669,7 +669,7 @@ class AgentSessionManager:
             if item is _END_TURN:
                 room.speaking = False
                 room.tts_seq = 0
-                await self.broadcast(room_id, protocol.agent_audio_end())
+                await self.broadcast(room_id, protocol.agent_audio_end(interrupted=False))
                 continue
             try:
                 pcm = await asyncio.to_thread(self.tts.synthesize, item)

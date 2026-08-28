@@ -117,9 +117,15 @@ def transcript(text: str, client_id: int) -> dict:
     return {"type": "transcript", "text": text, "client_id": client_id, "final": True}
 
 
-def agent_audio_end() -> dict:
-    """Build an agent_audio_end frame."""
-    return {"type": "agent_audio_end"}
+def agent_audio_end(interrupted: bool = False) -> dict:
+    """Build an agent_audio_end frame.
+
+    `interrupted` distinguishes a barge-in/cancellation teardown (client
+    should hard-stop and drop any queued audio) from a normal end-of-turn
+    signal (synthesis finished; the client should keep draining whatever
+    audio it has already queued until playback catches up).
+    """
+    return {"type": "agent_audio_end", "interrupted": interrupted}
 
 
 def audio_header(rate: int) -> dict:

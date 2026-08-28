@@ -64,7 +64,9 @@ def test_voice_builders():
     assert p.speaker_released() == {"type": "speaker_released"}
     assert p.transcript("hello", 2) == {
         "type": "transcript", "text": "hello", "client_id": 2, "final": True}
-    assert p.agent_audio_end() == {"type": "agent_audio_end"}
+    assert p.agent_audio_end() == {"type": "agent_audio_end", "interrupted": False}
+    assert p.agent_audio_end(interrupted=True) == {
+        "type": "agent_audio_end", "interrupted": True}
     assert p.audio_header(44100) == {
         "kind": "audio", "rate": 44100, "format": "s16le", "channels": 1}
     assert p.tts_header(7)["seq"] == 7 and p.tts_header(7)["rate"] == 24000
