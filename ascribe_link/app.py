@@ -273,6 +273,7 @@ def create_app(
 
     # --- Agent conversation session manager (persistent /ws/agent rooms) ---
     agent_session_manager: AgentSessionManager | None = None
+    _voice_engines: tuple[Any, Any] | None = None
     if enable_agent:
         agent_session_manager = AgentSessionManager(
             model=agent_model,
@@ -281,6 +282,8 @@ def create_app(
             tts=tts_engine,
         )
         voice_status = "enabled" if (stt_engine is not None and tts_engine is not None) else "disabled"
+        if stt_engine is not None and tts_engine is not None:
+            _voice_engines = (stt_engine, tts_engine)
         logger.info(
             "Agent conversation WebSocket enabled (model=%s, voice=%s)", agent_model, voice_status
         )
@@ -342,6 +345,23 @@ def create_app(
         background_tasks["sweeper"] = asyncio.create_task(
             job_registry.run_sweeper(interval=30.0)
         )
+
+        async def _warm_voice_engines() -> None:
+            # Load STT/TTS models off the hot path so the first conversation
+            # turn doesn't spend a minute downloading/loading mid-dialogue
+            # (which stalled keepalives and killed client sockets).
+            for engine in (_voice_engines or ()):
+                warm = getattr(engine, "warmup", None)
+                if warm is None:
+                    continue
+                try:
+                    await asyncio.to_thread(warm)
+                    logger.info("Voice engine %s warmed up", type(engine).__name__)
+                except Exception:
+                    logger.exception("Voice engine %s warmup failed", type(engine).__name__)
+
+        if _voice_engines:
+            background_tasks["voice_warmup"] = asyncio.create_task(_warm_voice_engines())
         background_tasks["loop_watchdog"] = asyncio.create_task(
             _run_loop_lag_watchdog()
         )

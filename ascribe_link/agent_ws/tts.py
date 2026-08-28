@@ -46,6 +46,11 @@ class KokoroTTS:
         self.model_dir = model_dir or DEFAULT_CACHE_DIR
         self._kokoro = None
 
+    def warmup(self) -> None:
+        """Download/load the model now (blocking) so the first real
+        conversation turn doesn't pay the cost mid-dialogue."""
+        self._ensure_model()
+
     def _ensure_model(self):
         if self._kokoro is None:
             try:

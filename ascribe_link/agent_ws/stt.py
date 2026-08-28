@@ -34,6 +34,11 @@ class FasterWhisperSTT:
         self.compute_type = compute_type
         self._model = None
 
+    def warmup(self) -> None:
+        """Download/load the model now (blocking) so the first real
+        conversation turn doesn't pay the cost mid-dialogue."""
+        self._ensure_model()
+
     def _ensure_model(self):
         if self._model is None:
             try:

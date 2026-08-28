@@ -198,8 +198,16 @@ def run_server_mode(args: argparse.Namespace) -> None:
     # log_config=None: don't let uvicorn install its own synchronous console
     # handlers — its loggers then propagate to the root logger, whose output
     # goes through the non-blocking queue (see _make_logging_nonblocking).
+    # ws_ping_timeout=60: the default 20s declared clients dead during long
+    # first-turn stalls (voice model download/load); see agent-voice notes.
     uvicorn.run(
-        app, host=args.host, port=args.port, reload=args.reload, log_config=None
+        app,
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        log_config=None,
+        ws_ping_interval=20.0,
+        ws_ping_timeout=60.0,
     )
 
 
