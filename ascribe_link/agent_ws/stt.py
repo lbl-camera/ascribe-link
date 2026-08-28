@@ -79,6 +79,12 @@ class UtteranceBuffer:
     def duration_s(self) -> float:
         return self._samples / self.RATE
 
+    # An utterance that is ONLY silence gets a longer grace period: the mic
+    # device streams zeros while it warms up, and users need a beat to start
+    # talking. Without this, 2.5s of warm-up zeros finalized as "(silence)"
+    # before the first word ever arrived.
+    SILENCE_ONLY_GRACE_S = 8.0
+
     def should_finalize(self, silence_s: float = 2.0, max_s: float = 60.0) -> bool:
         if self.duration_s < 0.5:
             return False
@@ -87,7 +93,10 @@ class UtteranceBuffer:
         combined = np.concatenate(self._chunks) if self._chunks else np.array(
             [], dtype=np.float32
         )
-        return audio.trailing_silence_s(combined, self.RATE) >= silence_s
+        trailing = audio.trailing_silence_s(combined, self.RATE)
+        if trailing >= self.duration_s - 0.05:  # nothing but silence so far
+            return self.duration_s >= self.SILENCE_ONLY_GRACE_S
+        return trailing >= silence_s
 
     def take(self) -> np.ndarray:
         combined = (

@@ -78,3 +78,33 @@ class TestFakeSTT:
         fake = FakeSTT()
         audio = np.zeros(1234, dtype=np.float32)
         assert fake.transcribe(audio) == "FAKE(1234 samples)"
+
+
+def test_silence_only_utterance_gets_grace_period():
+    from ascribe_link.agent_ws.stt import UtteranceBuffer
+    import numpy as np
+    """Mic warm-up streams zeros; an all-silence buffer must NOT finalize at
+    the normal 2s endpoint (regression: first Talk press returned '(silence)'
+    before the user's first word arrived)."""
+    from ascribe_link.agent_ws.audio import float32_to_pcm16
+
+    buf = UtteranceBuffer()
+    silence = np.zeros(16000 * 3, dtype=np.float32)  # 3s of zeros @16k
+    buf.add(float32_to_pcm16(silence), 16000)
+    assert not buf.should_finalize()  # 3s all-silence: still waiting
+
+    buf.add(float32_to_pcm16(np.zeros(16000 * 6, dtype=np.float32)), 16000)
+    assert buf.should_finalize()  # 9s all-silence: grace period exceeded
+
+
+def test_voiced_then_silence_still_finalizes_at_2s():
+    from ascribe_link.agent_ws.stt import UtteranceBuffer
+    import numpy as np
+    from ascribe_link.agent_ws.audio import float32_to_pcm16
+
+    buf = UtteranceBuffer()
+    t = np.arange(16000, dtype=np.float32) / 16000.0
+    tone = (0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+    buf.add(float32_to_pcm16(tone), 16000)
+    buf.add(float32_to_pcm16(np.zeros(16000 * 2 + 1600, dtype=np.float32)), 16000)
+    assert buf.should_finalize()
