@@ -14,8 +14,12 @@ def pcm16_to_float32(data: bytes) -> np.ndarray:
     Returns:
         Float32 array in [-1, 1] range.
     """
+    # Truncate to largest even length to handle odd-length inputs (e.g., network chunks)
+    even_len = (len(data) // 2) * 2
+    truncated_data = data[:even_len]
+
     # Interpret bytes as int16 (little-endian is numpy's default)
-    pcm16 = np.frombuffer(data, dtype=np.int16)
+    pcm16 = np.frombuffer(truncated_data, dtype=np.int16)
     # Convert to float32: divide by 32768.0 to get [-1, 1]
     float32 = pcm16.astype(np.float32) / 32768.0
     return float32
@@ -49,6 +53,10 @@ def resample(arr: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
     Returns:
         Resampled float32 array. If src_rate == dst_rate, returns the same array.
     """
+    # Handle empty input
+    if len(arr) == 0:
+        return np.array([], dtype=np.float32)
+
     # Identity case: same rate
     if src_rate == dst_rate:
         return arr

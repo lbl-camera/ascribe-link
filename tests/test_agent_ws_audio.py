@@ -61,6 +61,24 @@ class TestPCMConversion:
         assert np.all(pcm_vals <= 32767)
         assert np.all(pcm_vals >= -32768)
 
+    def test_pcm16_to_float32_odd_length_bytes_truncates(self):
+        """Odd-length bytes should truncate to largest even length (drop trailing byte)."""
+        # 3 bytes = 1 sample + 1 dropped byte
+        odd_bytes = b"\x01\x02\x03"
+        float_arr = audio.pcm16_to_float32(odd_bytes)
+
+        # Should get 1 sample (3 bytes → 2 bytes → 1 int16)
+        assert len(float_arr) == 1
+        assert float_arr.dtype == np.float32
+
+    def test_pcm16_to_float32_empty_bytes_returns_empty(self):
+        """Empty bytes should return empty float32 array."""
+        empty_bytes = b""
+        float_arr = audio.pcm16_to_float32(empty_bytes)
+
+        assert len(float_arr) == 0
+        assert float_arr.dtype == np.float32
+
 
 class TestResample:
     """Test audio resampling."""
@@ -109,6 +127,22 @@ class TestResample:
         """Resampled output should be float32."""
         arr = np.array([0.5, -0.3, 0.8, -0.1, 0.2], dtype=np.float32)
         resampled = audio.resample(arr, 16000, 8000)
+        assert resampled.dtype == np.float32
+
+    def test_resample_empty_array_different_rates(self):
+        """Empty array with different rates should return empty float32 array."""
+        empty_arr = np.array([], dtype=np.float32)
+        resampled = audio.resample(empty_arr, 48000, 16000)
+
+        assert len(resampled) == 0
+        assert resampled.dtype == np.float32
+
+    def test_resample_empty_array_same_rate(self):
+        """Empty array with same rate should return empty float32 array."""
+        empty_arr = np.array([], dtype=np.float32)
+        resampled = audio.resample(empty_arr, 16000, 16000)
+
+        assert len(resampled) == 0
         assert resampled.dtype == np.float32
 
 
@@ -183,3 +217,10 @@ class TestTrailingSilence:
         assert abs(trailing_silence - expected) <= 0.01, (
             f"Expected ~{expected}s trailing silence (1 window), got {trailing_silence}s"
         )
+
+    def test_trailing_silence_empty_array_returns_zero(self):
+        """Empty array should return 0.0 seconds of trailing silence."""
+        empty_arr = np.array([], dtype=np.float32)
+        trailing_silence = audio.trailing_silence_s(empty_arr, 16000, threshold=0.01)
+
+        assert trailing_silence == 0.0
