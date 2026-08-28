@@ -451,6 +451,12 @@ class AgentSessionManager:
 
         if room.utterance_buffer is None:
             room.utterance_buffer = UtteranceBuffer()
+            logger.info(
+                "First audio frame for utterance in room %s (%d bytes @ %s Hz)",
+                room_id,
+                len(payload),
+                header.get("rate", "?"),
+            )
         room.utterance_buffer.add(payload, header.get("rate", 48000))
 
         if room.utterance_buffer.should_finalize():
