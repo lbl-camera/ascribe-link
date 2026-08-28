@@ -34,6 +34,12 @@ logger = logging.getLogger(__name__)
 
 TOOL_CALL_TIMEOUT = 30.0
 
+# Wall-clock ceiling on holding the speaker floor. Endpointing is data-driven
+# (`UtteranceBuffer.should_finalize`), so a client that binds and then sends
+# nothing -- muted mic, crashed capture thread, dropped audio path -- would
+# otherwise hold the floor forever and starve every other client in the room.
+BIND_TIMEOUT_S = 90.0
+
 # Sentinel queued onto a room's TTS queue to mark "end of this turn" -- the
 # drain task broadcasts agent_audio_end() when it dequeues this instead of a
 # sentence string.
@@ -83,6 +89,7 @@ class _RoomState:
         # Voice floor control / utterance pipeline.
         "speaker",
         "utterance_buffer",
+        "bind_timeout_task",
         # TTS fan-out.
         "chunker",
         "tts_queue",
@@ -104,6 +111,9 @@ class _RoomState:
         # The socket currently holding the speaker floor (exclusive per room).
         self.speaker: Any = None
         self.utterance_buffer: UtteranceBuffer | None = None
+        # Watchdog releasing the floor BIND_TIMEOUT_S after it was granted if
+        # nothing ever finalized the utterance.
+        self.bind_timeout_task: asyncio.Task | None = None
 
         # Sentence-level chunker feeding the per-room TTS drain task.
         self.chunker: SentenceChunker | None = None
@@ -197,7 +207,10 @@ class AgentSessionManager:
         if was_speaker:
             # The speaker's disconnect behaves like unbind: finalize a
             # non-trivial buffered utterance, otherwise just release the floor.
-            await self._finalize_or_release(room, room_id, socket)
+            # `client_id` is passed explicitly because it has already been
+            # popped above -- otherwise the transcript broadcast would carry
+            # client_id null.
+            await self._finalize_or_release(room, room_id, socket, client_id)
         if client_id is not None:
             self._fail_pending_for_executor(room_id, client_id)
 
@@ -208,7 +221,7 @@ class AgentSessionManager:
             room.sockets.remove(socket)
         client_id = room.client_ids.pop(socket, None)
         if was_speaker:
-            await self._finalize_or_release(room, room_id, socket)
+            await self._finalize_or_release(room, room_id, socket, client_id)
         if client_id is not None:
             self._fail_pending_for_executor(room_id, client_id)
 
@@ -244,8 +257,14 @@ class AgentSessionManager:
 
             async def _handle() -> None:
                 await self.broadcast(room_id, frame)
-                if frame.get("type") == "agent_text_done":
+                frame_type = frame.get("type")
+                if frame_type == "agent_text_done":
                     await self._finish_tts_turn(room_id)
+                elif frame_type == "status" and frame.get("text") == "interrupted":
+                    # A cancelled turn never reaches agent_text_done, so the
+                    # TTS turn would otherwise never be torn down. Idempotent:
+                    # the interrupt/barge-in paths usually got here first.
+                    await self._cleanup_after_interrupt(room_id)
 
             asyncio.run_coroutine_threadsafe(_handle(), loop)
 
@@ -321,8 +340,12 @@ class AgentSessionManager:
                 await self._send(socket, protocol.turn_queued(position))
 
         elif frame_type == "interrupt":
-            if room.conversation is not None:
-                room.conversation.interrupt()
+            # Same teardown as barge-in: without it a cancelled turn never
+            # emits agent_text_done (the session emits status "interrupted"
+            # instead), so `_finish_tts_turn` never runs -- already-queued
+            # sentences keep synthesizing and broadcasting, and `speaking`
+            # stays True forever.
+            await self._interrupt_turn(room, room_id)
 
         elif frame_type == "tool_result":
             request_id = frame["request_id"]
@@ -344,23 +367,11 @@ class AgentSessionManager:
             if room.speaking:
                 # Barge-in: cancel TTS + clear its queue FIRST, then
                 # interrupt the running turn, then tell clients the audio
-                # stopped, and only then grant the floor. `barging_in` is
-                # set synchronously (no await before it) so any delta the
-                # worker thread delivers while we're awaiting cancellation
-                # below (the turn isn't actually interrupted yet) is
-                # dropped by `_handle_text_delta`/`_finish_tts_turn`
-                # instead of spawning a fresh TTS task that would outlive
-                # this agent_audio_end.
-                room.barging_in = True
-                try:
-                    await self._cancel_tts(room, room_id)
-                    if room.conversation is not None:
-                        room.conversation.interrupt()
-                finally:
-                    room.barging_in = False
-                await self.broadcast(room_id, protocol.agent_audio_end())
+                # stopped, and only then grant the floor.
+                await self._interrupt_turn(room, room_id)
             room.speaker = socket
             room.utterance_buffer = UtteranceBuffer()
+            self._arm_bind_timeout(room, room_id, socket)
             client_id = room.client_ids.get(socket)
             await self.broadcast(room_id, protocol.speaker_bound(client_id))
 
@@ -431,7 +442,11 @@ class AgentSessionManager:
 
         room = self._room(room_id)
         if room.speaker is not socket:
-            await self._send(socket, protocol.error("you do not hold the speaker floor"))
+            # Silently drop. This is the normal race after a silence-triggered
+            # finalize releases the floor: the client keeps streaming until
+            # `speaker_released` reaches it, and every in-flight chunk would
+            # otherwise raise an error banner in every panel.
+            logger.debug("Dropping audio from non-speaker socket in room %s", room_id)
             return
 
         if room.utterance_buffer is None:
@@ -441,11 +456,20 @@ class AgentSessionManager:
         if room.utterance_buffer.should_finalize():
             await self._finalize_utterance(room, room_id, socket)
 
-    async def _finalize_utterance(self, room: _RoomState, room_id: str, socket: Any) -> None:
-        """Transcribe the buffered utterance, release the floor, submit the turn."""
+    async def _finalize_utterance(
+        self, room: _RoomState, room_id: str, socket: Any, client_id: int | None = None
+    ) -> None:
+        """Transcribe the buffered utterance, release the floor, submit the turn.
+
+        `client_id` may be passed explicitly by callers that have already
+        removed the socket from `room.client_ids` (the disconnect paths), so
+        the transcript broadcast still carries a real id instead of null.
+        """
         buffer = room.utterance_buffer
         room.utterance_buffer = None
-        client_id = room.client_ids.get(socket)
+        if client_id is None:
+            client_id = room.client_ids.get(socket)
+        self._cancel_bind_timeout(room)
 
         # Release the floor BEFORE any broadcast below. A broadcast can fail
         # against this very socket if it's already gone (the speaker's
@@ -489,19 +513,84 @@ class AgentSessionManager:
             return
         room.speaker = None
         room.utterance_buffer = None
+        self._cancel_bind_timeout(room)
         await self.broadcast(room_id, protocol.speaker_released())
 
-    async def _finalize_or_release(self, room: _RoomState, room_id: str, socket: Any) -> None:
+    async def _finalize_or_release(
+        self, room: _RoomState, room_id: str, socket: Any, client_id: int | None = None
+    ) -> None:
         """`unbind` (or the speaker's disconnect): finalize a non-trivial buffer, else just release."""
         buffer = room.utterance_buffer
         if buffer is not None and buffer.duration_s >= 0.5:
-            await self._finalize_utterance(room, room_id, socket)
+            await self._finalize_utterance(room, room_id, socket, client_id)
         else:
             await self._release_speaker(room, room_id, socket)
 
     # ------------------------------------------------------------------
+    # Voice: bind watchdog
+    # ------------------------------------------------------------------
+
+    def _arm_bind_timeout(self, room: _RoomState, room_id: str, socket: Any) -> None:
+        """(Re)start the wall-clock watchdog for the floor just granted."""
+        self._cancel_bind_timeout(room)
+        room.bind_timeout_task = asyncio.ensure_future(
+            self._bind_timeout(room, room_id, socket)
+        )
+
+    def _cancel_bind_timeout(self, room: _RoomState) -> None:
+        task = room.bind_timeout_task
+        room.bind_timeout_task = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _bind_timeout(self, room: _RoomState, room_id: str, socket: Any) -> None:
+        try:
+            await asyncio.sleep(BIND_TIMEOUT_S)
+        except asyncio.CancelledError:
+            return
+        if room.speaker is not socket:
+            return
+        logger.info("Speaker floor timed out after %.1fs in room %s", BIND_TIMEOUT_S, room_id)
+        room.bind_timeout_task = None
+        room.speaker = None
+        room.utterance_buffer = None
+        await self._send(socket, protocol.status("(silence)"))
+        await self.broadcast(room_id, protocol.speaker_released())
+
+    # ------------------------------------------------------------------
     # Voice: TTS fan-out
     # ------------------------------------------------------------------
+
+    async def _interrupt_turn(self, room: _RoomState, room_id: str) -> None:
+        """Cancel the in-flight TTS turn and the running conversation turn.
+
+        `barging_in` is set synchronously (no await before it) so any delta
+        the worker thread delivers while we're awaiting cancellation below
+        (the turn isn't actually interrupted yet) is dropped by
+        `_handle_text_delta`/`_finish_tts_turn` instead of spawning a fresh
+        TTS task that would outlive this agent_audio_end.
+        """
+        room.barging_in = True
+        try:
+            await self._cancel_tts(room, room_id)
+            if room.conversation is not None:
+                room.conversation.interrupt()
+        finally:
+            room.barging_in = False
+        await self.broadcast(room_id, protocol.agent_audio_end())
+
+    async def _cleanup_after_interrupt(self, room_id: str) -> None:
+        """Idempotent TTS teardown for a turn that ended via cancellation."""
+        room = self._rooms.get(room_id)
+        if room is None:
+            return
+        if room.barging_in:
+            # The interrupting path owns the teardown; don't race it.
+            return
+        if room.tts_task is None and not room.speaking:
+            return
+        await self._cancel_tts(room, room_id)
+        await self.broadcast(room_id, protocol.agent_audio_end())
 
     async def _handle_text_delta(self, room_id: str, text: str) -> None:
         if self.tts is None:
@@ -699,6 +788,7 @@ class AgentSessionManager:
     async def shutdown(self) -> None:
         """Stop every room's conversation (app shutdown hook)."""
         for room in self._rooms.values():
+            self._cancel_bind_timeout(room)
             if room.conversation is not None:
                 room.conversation.stop()
                 room.conversation = None

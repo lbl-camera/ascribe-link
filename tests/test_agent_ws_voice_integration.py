@@ -119,11 +119,17 @@ async def test_bind_grants_floor_and_blocks_second_client(voice_client):
 
 
 # ----------------------------------------------------------------------
-# (b) audio from a non-speaker is rejected
+# (b) audio from a non-speaker is silently dropped (no error spam)
 # ----------------------------------------------------------------------
 
 
-async def test_audio_from_non_speaker_is_rejected(voice_client):
+async def test_audio_from_non_speaker_is_silently_dropped(voice_client):
+    """A client streaming past its floor release must not get an error frame.
+
+    After a silence-triggered finalize releases the floor, the client keeps
+    streaming until `speaker_released` reaches it; erroring on each in-flight
+    chunk put an error banner in every panel after every VAD endpoint.
+    """
     ws1 = await voice_client.websocket_connect("/ws/agent/voiceroom2")
     with ws1:
         ws1.receive_json()  # history
@@ -136,8 +142,13 @@ async def test_audio_from_non_speaker_is_rejected(voice_client):
             ws2.receive_json()  # speaker_bound (broadcast)
 
             ws2.send_bytes(_make_utterance_bytes())
-            err = ws2.receive_json()
-            assert err["type"] == "error"
+
+            # Nothing comes back for the dropped audio: the very next frame
+            # ws2 sees is the reply to this sentinel, sent afterwards.
+            ws2.send_json({"type": "bind"})
+            frame = ws2.receive_json()
+            assert frame["type"] == "error"
+            assert "held" in frame["message"]
 
 
 # ----------------------------------------------------------------------
@@ -257,6 +268,123 @@ async def test_bind_during_tts_barges_in(agent_factory):
                     assert bound_frame["client_id"] == h2["client_id"]
     finally:
         gate.set()
+
+
+# ----------------------------------------------------------------------
+# (e2) a typed `interrupt` frame mid-TTS tears the turn down like barge-in
+# ----------------------------------------------------------------------
+
+
+async def test_typed_interrupt_mid_tts_ends_audio(agent_factory):
+    gate = threading.Event()
+
+    class GatedTTS:
+        def synthesize(self, text):
+            gate.wait(timeout=5.0)
+            return FakeTTS().synthesize(text)
+
+    app = create_app(
+        enable_agent=True,
+        agent_client_factory=agent_factory,
+        stt_engine=FakeSTT(),
+        tts_engine=GatedTTS(),
+    )
+    try:
+        async with AsyncTestClient(app=app) as c:
+            ws = await c.websocket_connect("/ws/agent/voiceroom8")
+            with ws:
+                ws.receive_json()  # history
+
+                fake = agent_factory.clients[-1]
+                fake.scripted_messages = [text_msg("Hello there. And more.")]
+                ws.send_json({"type": "text", "text": "hi"})
+
+                # Sentences are queued; the (gated) synthesize call is blocked.
+                _drain_until_json(ws, "agent_text_done")
+
+                ws.send_json({"type": "interrupt"})
+                frames = _drain_until_json(ws, "agent_audio_end")
+
+                manager = c.app.state.agent_session_manager
+                room = manager._rooms["voiceroom8"]
+                assert room.speaking is False
+                assert room.tts_task is None
+
+                # Let any surviving synthesize call through, then confirm no
+                # TTS binary arrives after the agent_audio_end.
+                gate.set()
+                ws.send_json({"type": "text", "text": "ping"})
+                after = _drain_until_json(ws, "agent_text")
+                assert not [p for kind, p in after if kind == "binary"], after
+                assert frames
+    finally:
+        gate.set()
+
+
+# ----------------------------------------------------------------------
+# (e3) a bound speaker that never sends audio loses the floor on a timeout
+# ----------------------------------------------------------------------
+
+
+async def test_bind_times_out_and_releases_floor(agent_factory, monkeypatch):
+    from ascribe_link.agent_ws import manager as manager_mod
+
+    monkeypatch.setattr(manager_mod, "BIND_TIMEOUT_S", 0.05)
+
+    app = create_app(
+        enable_agent=True,
+        agent_client_factory=agent_factory,
+        stt_engine=FakeSTT(),
+        tts_engine=FakeTTS(),
+    )
+    async with AsyncTestClient(app=app) as c:
+        ws = await c.websocket_connect("/ws/agent/voiceroom9")
+        with ws:
+            ws.receive_json()  # history
+            ws.send_json({"type": "bind"})
+            assert ws.receive_json()["type"] == "speaker_bound"
+
+            # No audio is ever sent -- the watchdog must free the floor.
+            status = ws.receive_json()
+            assert status["type"] == "status"
+            assert status["text"] == "(silence)"
+            assert ws.receive_json()["type"] == "speaker_released"
+
+            manager = c.app.state.agent_session_manager
+            assert manager._rooms["voiceroom9"].speaker is None
+
+
+# ----------------------------------------------------------------------
+# (e4) speaker disconnect mid-utterance still names the speaker
+# ----------------------------------------------------------------------
+
+
+async def test_speaker_disconnect_transcript_carries_client_id(voice_client):
+    """The disconnect path pops client_ids before finalizing.
+
+    Passing the id through explicitly keeps `transcript.client_id` a real int
+    -- a null there is an `int(null)` runtime error in the Godot client.
+    """
+    ws1 = await voice_client.websocket_connect("/ws/agent/voiceroom10")
+    with ws1:
+        h1 = ws1.receive_json()  # history
+        ws2 = await voice_client.websocket_connect("/ws/agent/voiceroom10")
+        with ws2:
+            ws2.receive_json()  # history
+
+            ws1.send_json({"type": "bind"})
+            ws1.receive_json()
+            ws2.receive_json()  # speaker_bound
+
+            # >= 0.5 s of speech buffered, but no trailing silence, so the
+            # disconnect (not the VAD) is what finalizes it.
+            ws1.send_bytes(_make_utterance_bytes(tone_s=0.8, silence_s=0.0))
+            ws1.close()
+
+            frames = _drain_until_json(ws2, "transcript")
+            transcript = [f for kind, f in frames if kind == "json"][-1]
+            assert transcript["client_id"] == h1["client_id"]
+            assert transcript["client_id"] is not None
 
 
 # ----------------------------------------------------------------------
