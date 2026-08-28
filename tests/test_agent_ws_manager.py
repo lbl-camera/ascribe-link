@@ -17,6 +17,10 @@ from ascribe_link.agent_ws.manager import AgentSessionManager
 class FakeSocket:
     def __init__(self, fail=False):
         self.sent = []
+        # Ordered (kind, payload) log covering BOTH send_json and
+        # send_bytes -- needed to assert relative ordering between JSON
+        # control frames and binary TTS frames.
+        self.events = []
         self.fail = fail
         self.closed = False
 
@@ -25,6 +29,13 @@ class FakeSocket:
             self.closed = True
             raise RuntimeError("socket closed")
         self.sent.append(frame)
+        self.events.append(("json", frame))
+
+    async def send_bytes(self, data):
+        if self.fail:
+            self.closed = True
+            raise RuntimeError("socket closed")
+        self.events.append(("binary", data))
 
 
 class FakeConversation:
@@ -445,3 +456,137 @@ async def test_get_staged_result_is_room_scoped():
     assert mgr.get_staged_result("room1", specimen_id) == "payload"
     assert mgr.get_staged_result("otherroom", specimen_id) is None
     assert mgr.get_staged_result("room1", "nope") is None
+
+
+# ----------------------------------------------------------------------
+# Voice review fixes: barge-in generation guard, widened speaking gate,
+# reentrant socket-prune during finalize.
+# ----------------------------------------------------------------------
+
+
+import threading
+
+import numpy as np
+
+from .fake_voice import FakeSTT, FakeTTS
+
+
+def make_voice_manager():
+    mgr = make_manager()
+    mgr.stt = FakeSTT()
+    mgr.tts = FakeTTS()
+    return mgr
+
+
+class GatedTTS:
+    """Blocks `synthesize` on a `threading.Event` until released."""
+
+    def __init__(self):
+        self.gate = threading.Event()
+
+    def synthesize(self, text):
+        self.gate.wait(timeout=5.0)
+        return FakeTTS().synthesize(text)
+
+
+def _tone_pcm16(n=8000, rate=16000, freq=440.0):
+    t = np.arange(n, dtype=np.float32) / rate
+    tone = (0.3 * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+    return np.clip(tone * 32767, -32768, 32767).astype(np.int16).tobytes()
+
+
+async def test_no_stale_tts_frames_after_barge_in(monkeypatch):
+    """Finding 1: a delta racing the barge-in's cancellation must not spawn
+    a fresh TTS task that outlives the barge-in's own agent_audio_end."""
+    mgr = make_voice_manager()
+    tts = GatedTTS()
+    mgr.tts = tts
+
+    s1 = FakeSocket()
+    await mgr.connect("room1", s1)
+    room = mgr._rooms["room1"]
+
+    # Kick off a sentence -> spawns the drain task, which blocks in
+    # synthesize() (simulating slow/streaming TTS mid-turn).
+    await mgr._handle_text_delta("room1", "First sentence.")
+    await asyncio.sleep(0)  # let the drain task start and enter synthesize()
+    assert room.tts_task is not None
+    assert room.speaking is True
+
+    loop = asyncio.get_running_loop()
+    # Simulate the worker thread delivering another delta exactly while
+    # `_cancel_tts` is awaiting the cancelled drain task (before
+    # conversation.interrupt() has run) -- this used to spawn a fresh,
+    # un-invalidated task that broadcast audio AFTER agent_audio_end.
+    loop.call_soon(
+        lambda: asyncio.ensure_future(mgr._handle_text_delta("room1", "Second sentence."))
+    )
+
+    tts.gate.set()  # let any synthesize() call (correct or stale) resolve fast
+    s1.events.clear()
+    await mgr.handle_frame("room1", s1, {"type": "bind"})
+    await asyncio.sleep(0.05)  # drain anything scheduled
+
+    audio_end_positions = [
+        i for i, (kind, f) in enumerate(s1.events) if kind == "json" and f["type"] == "agent_audio_end"
+    ]
+    assert audio_end_positions, s1.events
+    after = s1.events[audio_end_positions[0] + 1 :]
+    assert not any(kind == "binary" for kind, _ in after), s1.events
+
+
+async def test_bind_interrupts_during_unterminated_stream():
+    """Finding 2: an unterminated streaming delta must still set `speaking`
+    so a bind mid-stream barges in (interrupts + ends audio) instead of
+    letting the eventual flush talk over the new speaker."""
+    mgr = make_voice_manager()
+    s1 = FakeSocket()
+    await mgr.connect("room1", s1)
+    convo = FakeConversation.instances[-1]
+    room = mgr._rooms["room1"]
+
+    # No sentence terminator -> chunker.feed() yields no complete sentence.
+    await mgr._handle_text_delta("room1", "Hello witho")
+    assert room.speaking is True
+    assert room.tts_task is None  # no full sentence yet, nothing to synthesize
+
+    s1.sent.clear()
+    await mgr.handle_frame("room1", s1, {"type": "bind"})
+
+    assert convo.interrupted is True
+    types = [f["type"] for f in s1.sent]
+    assert "agent_audio_end" in types
+    assert "speaker_bound" in types
+    assert not any(kind == "binary" for kind, _ in s1.events)  # nothing was ever synthesized
+    assert room.speaking is False
+
+
+async def test_dead_speaker_finalize_does_not_reenter_on_broadcast_prune(monkeypatch):
+    """Finding 3: finalizing a dead speaker's utterance must not reenter
+    itself when its own broadcast fails against that same (already-dead)
+    socket."""
+    mgr = make_voice_manager()
+    s1 = FakeSocket(fail=True)  # every send_json/send_bytes raises
+    await mgr.connect("room1", s1)
+    convo = FakeConversation.instances[-1]
+    room = mgr._rooms["room1"]
+    room.speaker = s1
+
+    buf = manager_module.UtteranceBuffer()
+    buf.add(_tone_pcm16(), 16000)
+    room.utterance_buffer = buf
+
+    drop_calls = []
+    orig_drop = mgr._drop_socket
+
+    async def counting_drop(room_, socket_, room_id_):
+        drop_calls.append(socket_)
+        await orig_drop(room_, socket_, room_id_)
+
+    monkeypatch.setattr(mgr, "_drop_socket", counting_drop)
+
+    await mgr._finalize_utterance(room, "room1", s1)
+
+    assert drop_calls == [s1]  # exactly one prune, no reentrant double-drop
+    assert len(convo.submitted) == 1  # not double-submitted
+    assert s1 not in room.sockets

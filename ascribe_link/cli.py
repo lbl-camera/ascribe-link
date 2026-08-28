@@ -99,6 +99,12 @@ def main() -> None:
     )
     _make_logging_nonblocking()
 
+    if args.voice and not args.enable_agent:
+        logging.warning(
+            "--voice has no effect without --enable-agent (voice rides on "
+            "/ws/agent); voice will stay disabled"
+        )
+
     if args.worker:
         # Worker mode: connect to a relay
         run_worker_mode(args)

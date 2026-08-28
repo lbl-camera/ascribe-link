@@ -25,8 +25,6 @@ import logging
 import uuid
 from typing import Any
 
-import numpy as np
-
 from ascribe_link.agent_ws import audio, protocol
 from ascribe_link.agent_ws.session import AgentConversation
 from ascribe_link.agent_ws.stt import STTEngine, UtteranceBuffer
@@ -91,6 +89,7 @@ class _RoomState:
         "tts_task",
         "tts_seq",
         "speaking",
+        "barging_in",
     )
 
     def __init__(self) -> None:
@@ -115,6 +114,13 @@ class _RoomState:
         # in flight (sentences queued/synthesizing, agent_audio_end not
         # yet sent) -- drives the barge-in decision on `bind`.
         self.speaking: bool = False
+        # True for the duration of a barge-in's cancel+interrupt sequence:
+        # `_handle_text_delta`/`_finish_tts_turn` must no-op while this is
+        # set, otherwise a delta from the turn being interrupted (delivered
+        # from the worker thread before `conversation.interrupt()` has
+        # actually run) can spawn a fresh TTS task that broadcasts audio
+        # AFTER the barge-in's own agent_audio_end.
+        self.barging_in: bool = False
 
 
 class AgentSessionManager:
@@ -180,23 +186,29 @@ class AgentSessionManager:
         room = self._rooms.get(room_id)
         if room is None:
             return
-        if room.speaker is socket:
-            # The speaker's disconnect behaves like unbind: finalize a
-            # non-trivial buffered utterance, otherwise just release the floor.
-            await self._finalize_or_release(room, room_id, socket)
+        # Remove the socket from bookkeeping BEFORE finalizing: finalization
+        # broadcasts (transcript/speaker_released), and if this socket is
+        # already gone from room.sockets those broadcasts can't fail against
+        # it and reenter this same drop path (see _drop_socket below).
+        was_speaker = room.speaker is socket
         if socket in room.sockets:
             room.sockets.remove(socket)
         client_id = room.client_ids.pop(socket, None)
+        if was_speaker:
+            # The speaker's disconnect behaves like unbind: finalize a
+            # non-trivial buffered utterance, otherwise just release the floor.
+            await self._finalize_or_release(room, room_id, socket)
         if client_id is not None:
             self._fail_pending_for_executor(room_id, client_id)
 
     async def _drop_socket(self, room: _RoomState, socket: Any, room_id: str) -> None:
         """Remove a socket that failed to send (broadcast pruning path)."""
-        if room.speaker is socket:
-            await self._finalize_or_release(room, room_id, socket)
+        was_speaker = room.speaker is socket
         if socket in room.sockets:
             room.sockets.remove(socket)
         client_id = room.client_ids.pop(socket, None)
+        if was_speaker:
+            await self._finalize_or_release(room, room_id, socket)
         if client_id is not None:
             self._fail_pending_for_executor(room_id, client_id)
 
@@ -332,10 +344,20 @@ class AgentSessionManager:
             if room.speaking:
                 # Barge-in: cancel TTS + clear its queue FIRST, then
                 # interrupt the running turn, then tell clients the audio
-                # stopped, and only then grant the floor.
-                await self._cancel_tts(room, room_id)
-                if room.conversation is not None:
-                    room.conversation.interrupt()
+                # stopped, and only then grant the floor. `barging_in` is
+                # set synchronously (no await before it) so any delta the
+                # worker thread delivers while we're awaiting cancellation
+                # below (the turn isn't actually interrupted yet) is
+                # dropped by `_handle_text_delta`/`_finish_tts_turn`
+                # instead of spawning a fresh TTS task that would outlive
+                # this agent_audio_end.
+                room.barging_in = True
+                try:
+                    await self._cancel_tts(room, room_id)
+                    if room.conversation is not None:
+                        room.conversation.interrupt()
+                finally:
+                    room.barging_in = False
                 await self.broadcast(room_id, protocol.agent_audio_end())
             room.speaker = socket
             room.utterance_buffer = UtteranceBuffer()
@@ -423,19 +445,32 @@ class AgentSessionManager:
         """Transcribe the buffered utterance, release the floor, submit the turn."""
         buffer = room.utterance_buffer
         room.utterance_buffer = None
-        audio_16k = buffer.take() if buffer is not None else np.array([], dtype=np.float32)
-
-        text = await asyncio.to_thread(self.stt.transcribe, audio_16k)
-        text = (text or "").strip()
-
         client_id = room.client_ids.get(socket)
+
+        # Release the floor BEFORE any broadcast below. A broadcast can fail
+        # against this very socket if it's already gone (the speaker's
+        # disconnect path) and trigger `_drop_socket`, which must not see
+        # this socket as still the current speaker -- that would reenter
+        # `_finalize_or_release`/`_finalize_utterance` a second time and
+        # double-submit the turn.
+        room.speaker = None
+
+        if buffer is None or buffer.duration_s <= 0:
+            # Nothing was actually recorded -- treat as silence without
+            # bothering the STT engine with an empty array.
+            text = ""
+        else:
+            audio_16k = buffer.take()
+            text = await asyncio.to_thread(self.stt.transcribe, audio_16k)
+            text = (text or "").strip()
+
         if not text:
             await self._send(socket, protocol.status("(silence)"))
-            await self._release_speaker(room, room_id, socket)
+            await self.broadcast(room_id, protocol.speaker_released())
             return
 
         await self.broadcast(room_id, protocol.transcript(text, client_id))
-        await self._release_speaker(room, room_id, socket)
+        await self.broadcast(room_id, protocol.speaker_released())
 
         try:
             if room.conversation is None:
@@ -472,12 +507,20 @@ class AgentSessionManager:
         if self.tts is None:
             return
         room = self._room(room_id)
+        if room.barging_in:
+            # A delta from the turn currently being interrupted, delivered
+            # from the worker thread before conversation.interrupt() has
+            # actually run -- drop it instead of spawning a fresh TTS task.
+            return
+        # Any delta -- even one that doesn't complete a sentence yet -- means
+        # the agent is (about to start) speaking, so `bind` must barge in
+        # rather than let a later flush talk over the new speaker.
+        room.speaking = True
         if room.chunker is None:
             room.chunker = SentenceChunker()
         sentences = room.chunker.feed(text)
         if not sentences:
             return
-        room.speaking = True
         self._ensure_tts_task(room, room_id)
         for sentence in sentences:
             room.tts_queue.put_nowait(sentence)
@@ -492,6 +535,10 @@ class AgentSessionManager:
         if self.tts is None:
             return
         room = self._room(room_id)
+        if room.barging_in:
+            # The turn is being barged into right now -- `_cancel_tts` owns
+            # tearing down the queue/task; don't race it by re-queueing.
+            return
         remainder = room.chunker.flush() if room.chunker is not None else ""
         self._ensure_tts_task(room, room_id)
         if remainder:
