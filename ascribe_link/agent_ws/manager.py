@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
+from pathlib import Path
 from typing import Any
 
 from ascribe_link.agent_ws import audio, protocol
@@ -33,6 +35,11 @@ from ascribe_link.agent_ws.tts import SentenceChunker, TTSEngine, speakable_text
 logger = logging.getLogger(__name__)
 
 TOOL_CALL_TIMEOUT = 30.0
+
+# Built-in CLI tools pre-approved for the conversational agent (it inspects
+# and converts data files before submitting them). Kept in step with
+# agent_generator's allowed_tools.
+BUILTIN_TOOLS = ("Read", "Write", "Edit", "Bash", "Glob", "Grep")
 
 # Wall-clock ceiling on holding the speaker floor. Endpointing is data-driven
 # (`UtteranceBuffer.should_finalize`), so a client that binds and then sends
@@ -310,9 +317,18 @@ class AgentSessionManager:
 
             server, allowed_tools, _sdk_tools = build_conversation_tools(sink)
             options = ClaudeAgentOptions(
+                cli_path=os.environ.get("ASCRIBE_LINK_CLAUDE_CLI") or None,
                 model=self.model,
                 mcp_servers={"scene": server},
-                allowed_tools=allowed_tools,
+                # The server is headless and the room protocol has no approval
+                # frame, so nobody can answer a CLI permission prompt. Mirror
+                # agent_generator: pre-approve the tools the agent needs and
+                # let acceptEdits cover file edits under the repo. Locally this
+                # was masked by the developer's own ~/.claude settings
+                # (defaultMode) leaking into the spawned CLI.
+                allowed_tools=[*BUILTIN_TOOLS, *allowed_tools],
+                permission_mode="acceptEdits",
+                add_dirs=[str(Path(__file__).resolve().parent.parent.parent)],
             )
             return ClaudeSDKClient(options=options)
 

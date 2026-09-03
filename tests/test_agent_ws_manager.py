@@ -729,3 +729,28 @@ async def test_text_while_idle_does_not_interrupt():
 
     assert not convo.interrupted
     assert not any(f.get("type") == "agent_audio_end" for f in s1.sent)
+
+
+def test_real_client_factory_preapproves_tools(monkeypatch):
+    """The server is headless: nobody can answer a CLI permission prompt, so
+    the conversational client must ship with the tools pre-approved. Locally
+    this was masked by the developer's own ~/.claude defaultMode."""
+    import claude_agent_sdk
+
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, options):
+            captured["options"] = options
+
+    monkeypatch.setattr(claude_agent_sdk, "ClaudeSDKClient", FakeClient)
+    mgr = AgentSessionManager(model="claude-test")
+    sink = manager_module._RoomSink(mgr, "room1")
+    mgr._build_real_client_factory(sink)()
+
+    opts = captured["options"]
+    assert opts.permission_mode == "acceptEdits"
+    for name in ("Bash", "Read", "Write", "Edit"):
+        assert name in opts.allowed_tools
+    assert "mcp__scene__submit_volume_file" in opts.allowed_tools
+    assert opts.add_dirs and opts.add_dirs[0].endswith("ascribe-link")
