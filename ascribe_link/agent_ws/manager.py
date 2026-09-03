@@ -28,7 +28,7 @@ from typing import Any
 from ascribe_link.agent_ws import audio, protocol
 from ascribe_link.agent_ws.session import AgentConversation
 from ascribe_link.agent_ws.stt import STTEngine, UtteranceBuffer
-from ascribe_link.agent_ws.tts import SentenceChunker, TTSEngine
+from ascribe_link.agent_ws.tts import SentenceChunker, TTSEngine, speakable_text
 
 logger = logging.getLogger(__name__)
 
@@ -690,8 +690,14 @@ class AgentSessionManager:
             # died, the queued _END_TURN would never be dequeued, no
             # agent_audio_end would go out, and every client would sit on
             # "agent speaking" until the next turn.
+            # Markdown and typed symbols read aloud badly ("asterisk asterisk
+            # Done asterisk asterisk"); voice the speakable rewrite instead,
+            # and skip sentences that were nothing but markup.
+            spoken = speakable_text(item)
+            if not spoken:
+                continue
             try:
-                pcm = await asyncio.to_thread(self.tts.synthesize, item)
+                pcm = await asyncio.to_thread(self.tts.synthesize, spoken)
                 seq = room.tts_seq
                 room.tts_seq += 1
                 payload = protocol.encode_binary(

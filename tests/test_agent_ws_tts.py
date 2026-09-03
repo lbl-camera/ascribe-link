@@ -58,3 +58,27 @@ class TestFakeTTS:
         assert out.dtype == np.float32
         assert len(out) == 2400
         assert np.abs(out).max() > 0.0
+
+
+class TestSpeakableText:
+    def test_strips_bold_italic_and_headers(self):
+        assert t.speakable_text("**Done** -- it's *up* in the ___viewer___.") == "Done -- it's up in the viewer."
+        assert t.speakable_text("## Results") == "Results"
+
+    def test_bullets_links_code_and_urls(self):
+        assert t.speakable_text("- Loaded `plant.tif` from [the repo](https://x.y/z)") == "Loaded plant.tif from the repo"
+        assert t.speakable_text("1. see https://example.com/a?b=c now") == "see link now"
+        assert t.speakable_text("```python") == ""
+        assert t.speakable_text("---") == ""
+
+    def test_symbols_become_words(self):
+        assert t.speakable_text("Subsampled 1004×521×816 → 251x131x204 uint8") == "Subsampled 1004 by 521 by 816 to 251 by 131 by 204 uint8"
+        assert t.speakable_text("saved as `plant_sub.npy` & `mesh_out.json`") == "saved as plant sub.npy and mesh out.json"
+
+    def test_emoji_and_leftover_markup_dropped(self):
+        assert t.speakable_text("Nothing rendering 🌷 <ok> | fine") == "Nothing rendering ok fine"
+
+    def test_plain_sentences_untouched(self):
+        s = "The volume is 6.7 MB, mean 104.4, std 8.8."
+        assert t.speakable_text(s) == s
+        assert t.speakable_text("Is it 50% done?") == "Is it 50% done?"

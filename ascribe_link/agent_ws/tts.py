@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import os
 import urllib.request
 from typing import Protocol
@@ -92,6 +93,70 @@ class KokoroTTS:
 
 _TERMINATORS = (".", "!", "?", "\n")
 _MIN_CHARS_SINCE_BREAK = 3
+
+# --- speakable text -----------------------------------------------------------
+# The agent writes markdown; Kokoro reads it literally ("asterisk asterisk
+# Done asterisk asterisk"). Strip formatting and turn the symbols people say
+# differently from how they're written into words, per sentence.
+
+_RE_FENCE = re.compile(r"```[\w-]*")                     # fence markers (content kept)
+_RE_INLINE_CODE = re.compile(r"`([^`]*)`")
+_RE_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")           # [text](url) -> text
+_RE_IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)")           # ![alt](url) -> ""
+_RE_URL = re.compile(r"https?://\S+|www\.\S+")
+_RE_HEADER = re.compile(r"^\s{0,3}#{1,6}\s+", re.MULTILINE)
+_RE_BULLET = re.compile(r"^\s*(?:[-*+•]|\d+[.)])\s+", re.MULTILINE)
+_RE_BLOCKQUOTE = re.compile(r"^\s*>\s?", re.MULTILINE)
+_RE_HRULE = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$", re.MULTILINE)
+_RE_EMPHASIS = re.compile(r"(\*{1,3}|_{1,3}|~~)(?=\S)(.+?)(?<=\S)\1")
+_RE_DIMENSIONS = re.compile(r"(?<=\d)\s*[x×]\s*(?=\d)")   # 251x131 -> 251 by 131
+_RE_SNAKE = re.compile(r"(?<=\w)_(?=\w)")                 # plant_sub -> plant sub
+_RE_ARROW = re.compile(r"\s*(?:->|=>|→|⇒)\s*")
+_RE_EMOJI = re.compile(
+    "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0001F900-\U0001F9FF️‍]"
+)
+_RE_LEFTOVER_SYMBOLS = re.compile(r"[*_`#|\\<>{}\[\]^~]")
+_RE_SPACE = re.compile(r"[ \t]+")
+_RE_SPACE_BEFORE_PUNCT = re.compile(r"\s+([,.;:!?])")
+
+
+def speakable_text(text: str) -> str:
+    """Rewrite one sentence of agent markdown into something worth voicing.
+
+    Formatting is removed (bold/italic/headers/bullets/code/links); symbols
+    that are read aloud differently from how they're typed become words
+    (``251x131`` -> ``251 by 131``, ``a -> b`` -> ``a to b``, ``&`` -> ``and``,
+    ``plant_sub`` -> ``plant sub``); emoji and stray markup characters are
+    dropped. Returns "" when nothing speakable remains (e.g. a bare ``---``
+    or a fence line), which the caller should skip.
+    """
+    s = text
+    s = _RE_IMAGE.sub("", s)
+    s = _RE_LINK.sub(r"\1", s)
+    s = _RE_URL.sub("link", s)
+    s = _RE_FENCE.sub("", s)
+    s = _RE_INLINE_CODE.sub(r"\1", s)
+    s = _RE_HRULE.sub("", s)
+    s = _RE_HEADER.sub("", s)
+    s = _RE_BLOCKQUOTE.sub("", s)
+    s = _RE_BULLET.sub("", s)
+    # snake_case before emphasis, so `plant_sub` ... `mesh_out` can't be
+    # mistaken for an _italic_ span.
+    s = _RE_SNAKE.sub(" ", s)
+    for _ in range(3):  # nested emphasis: ***x***, **_x_**
+        s = _RE_EMPHASIS.sub(r"\2", s)
+    s = _RE_DIMENSIONS.sub(" by ", s)
+    s = _RE_ARROW.sub(" to ", s)
+    s = s.replace("&", " and ")
+    s = _RE_EMOJI.sub("", s)
+    s = _RE_LEFTOVER_SYMBOLS.sub(" ", s)
+    s = _RE_SPACE.sub(" ", s)
+    s = _RE_SPACE_BEFORE_PUNCT.sub(r"\1", s)
+    s = s.strip()
+    # Nothing but punctuation left (e.g. a fence or rule line) -> nothing to say.
+    if not re.search(r"[A-Za-z0-9À-￿]", s):
+        return ""
+    return s
 
 
 class SentenceChunker:
