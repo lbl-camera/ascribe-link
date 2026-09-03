@@ -132,6 +132,30 @@ def _client_forward(
     return handler
 
 
+async def _show_staged(sink: ConversationSink, specimen_id: str, specimen_type: str) -> str:
+    """Push a just-staged specimen to the client (the same path as load_specimen).
+
+    Staging alone only parks the result in the room store; nothing reaches
+    the headset until the client is told to fetch it. The submit tools used
+    to stop there while claiming "now visible", so the agent -- reasonably --
+    never followed up with load_specimen. Returns a short suffix describing
+    the outcome for the tool's text result.
+    """
+    try:
+        await asyncio.wait_for(
+            sink.request_client_tool(
+                "load_specimen", {"specimen_id": specimen_id, "type": specimen_type}
+            ),
+            CLIENT_TOOL_TIMEOUT,
+        )
+    except Exception as err:  # noqa: BLE001 - staging succeeded; report, don't fail the tool
+        return (
+            f" Staged, but the viewer could not be told to load it ({err}); "
+            f"call load_specimen('{specimen_id}') to retry."
+        )
+    return " It is now visible to the user."
+
+
 def _resolve_submit_path(file_path: str) -> Path | None:
     """Resolve a ``submit_*_file`` path: relative to the server cwd, else as given."""
     candidate = Path.cwd() / file_path
@@ -242,10 +266,11 @@ def build_conversation_tools(sink: ConversationSink) -> tuple[dict, list[str], l
         flat_vertices = [c for v in vertices for c in v]
         mesh_result = MeshResult(vertices=flat_vertices, indices=list(indices))
         specimen_id = sink.stage_result(mesh_result)
+        shown = await _show_staged(sink, specimen_id, "mesh")
 
         return _text(
             f"Mesh submitted as specimen '{specimen_id}': {len(vertices)} vertices, "
-            f"{len(indices) // 3} triangles. It is now visible to the user."
+            f"{len(indices) // 3} triangles.{shown}"
         )
 
     submit_volume_schema = {
@@ -314,11 +339,12 @@ def build_conversation_tools(sink: ConversationSink) -> tuple[dict, list[str], l
             shape=list(shape), dtype=dtype, data=data, spacing=spacing
         )
         specimen_id = sink.stage_result(volume_result)
+        shown = await _show_staged(sink, specimen_id, "volume")
 
         total_voxels = int(shape[0]) * int(shape[1]) * int(shape[2])
         return _text(
             f"Volume submitted as specimen '{specimen_id}': {shape} "
-            f"({total_voxels:,} voxels, {dtype}). It is now visible to the user."
+            f"({total_voxels:,} voxels, {dtype}).{shown}"
         )
 
     submit_mesh_file_schema = {
@@ -388,10 +414,10 @@ def build_conversation_tools(sink: ConversationSink) -> tuple[dict, list[str], l
             vertices=flat_vertices, indices=[int(i) for i in indices], normals=flat_normals
         )
         specimen_id = sink.stage_result(mesh_result)
+        shown = await _show_staged(sink, specimen_id, "mesh")
         return _text(
             f"Mesh submitted from file as specimen '{specimen_id}': "
-            f"{len(flat_vertices) // 3} vertices, {len(indices) // 3} triangles. "
-            "It is now visible to the user."
+            f"{len(flat_vertices) // 3} vertices, {len(indices) // 3} triangles.{shown}"
         )
 
     submit_volume_file_schema = {
@@ -443,11 +469,12 @@ def build_conversation_tools(sink: ConversationSink) -> tuple[dict, list[str], l
         spacing = args.get("spacing") or file_spacing
         volume_result = await asyncio.to_thread(VolumeResult.from_numpy, arr, spacing=spacing)
         specimen_id = sink.stage_result(volume_result)
+        shown = await _show_staged(sink, specimen_id, "volume")
 
         total_voxels = int(arr.shape[0] * arr.shape[1] * arr.shape[2])
         return _text(
             f"Volume submitted from file as specimen '{specimen_id}': {volume_result.shape} "
-            f"({total_voxels:,} voxels, {volume_result.dtype}). It is now visible to the user."
+            f"({total_voxels:,} voxels, {volume_result.dtype}).{shown}"
         )
 
     @tool(

@@ -189,6 +189,7 @@ def test_submit_volume_file_stages_volume_from_npy(tmp_path):
     assert staged.spacing == [1, 2, 3]
     np.testing.assert_array_equal(staged.to_numpy(), arr)
     assert specimen_id in result["content"][0]["text"]
+    assert sink.requested == [("load_specimen", {"specimen_id": specimen_id, "type": "volume"})]
 
 
 def test_submit_volume_file_rejects_missing_and_non_3d(tmp_path):
@@ -268,6 +269,25 @@ def test_submit_volume_stages_volume_result():
     assert staged.shape == [4, 4, 4]
     assert specimen_id in result["content"][0]["text"]
     assert not result.get("is_error")
+    # Staging alone shows nothing; the tool must push it to the client.
+    assert sink.requested == [("load_specimen", {"specimen_id": specimen_id, "type": "volume"})]
+    assert "now visible" in result["content"][0]["text"]
+
+
+def test_submit_reports_when_client_push_fails_but_keeps_staged():
+    sink = FakeSink()
+    sink.request_exc = RuntimeError("executing client 7 disconnected before replying")
+    _, _, sdk_tools = ws_tools.build_conversation_tools(sink)
+
+    result = asyncio.run(
+        _call_tool(sdk_tools, "submit_mesh", {"vertices": [[0, 0, 0], [1, 0, 0], [0, 1, 0]], "indices": [0, 1, 2]})
+    )
+
+    assert not result.get("is_error")
+    assert len(sink.staged) == 1
+    text = result["content"][0]["text"]
+    assert "now visible" not in text
+    assert "disconnected" in text and "load_specimen" in text
 
 
 def test_submit_mesh_invalid_returns_error():
