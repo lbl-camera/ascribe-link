@@ -109,8 +109,29 @@ class SpecimenController(Controller):
         specimen_id: str,
         function_registry: FunctionRegistry,
         federation_hub: FederationHub | None = None,
+        room_id: str = "ascribe",
+        agent_session_manager: Any | None = None,
     ) -> SpecimenMetadata:
-        """Get full metadata for a specimen."""
+        """Get full metadata for a specimen.
+
+        Agent-staged specimens (submit_mesh / submit_volume during a
+        conversation) live only in the room's staged store, so pass
+        ``?room_id=<room>`` to resolve them; the synthesized metadata carries
+        the one field the client needs from it -- ``type`` -- so it can pick
+        the right renderer.
+        """
+        if agent_session_manager is not None:
+            if agent_session_manager.get_staged_result(room_id, specimen_id) is not None:
+                staged_type = agent_session_manager.resolve_specimen_type(room_id, specimen_id)
+                if staged_type is not None:
+                    return SpecimenMetadata(
+                        id=specimen_id,
+                        display_name=f"Agent result {specimen_id}",
+                        description="Submitted by the conversational agent",
+                        type=SpecimenType(staged_type),
+                        tags=["agent"],
+                    )
+
         # Check if this is a federated specimen (worker_id:specimen_id)
         if ":" in specimen_id and federation_hub:
             worker_id, actual_id = specimen_id.split(":", 1)

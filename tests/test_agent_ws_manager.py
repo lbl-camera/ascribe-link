@@ -594,3 +594,67 @@ async def test_dead_speaker_finalize_does_not_reenter_on_broadcast_prune(monkeyp
     assert drop_calls == [s1]  # exactly one prune, no reentrant double-drop
     assert len(convo.submitted) == 1  # not double-submitted
     assert s1 not in room.sockets
+
+
+# ----------------------------------------------------------------------
+# Specimen type resolution (backs load_specimen's type injection)
+# ----------------------------------------------------------------------
+
+
+class _FakeStore:
+    def __init__(self, types):
+        self._types = types
+
+    def get(self, specimen_id):
+        from ascribe_link.models import SpecimenMetadata, SpecimenType
+
+        t = self._types.get(specimen_id)
+        if t is None:
+            return None
+        return SpecimenMetadata(id=specimen_id, display_name=specimen_id, type=SpecimenType(t))
+
+
+class _FakeRegistry:
+    def __init__(self, types):
+        self._types = types
+
+    def get_specimen(self, specimen_id):
+        from ascribe_link.models import SpecimenMetadata, SpecimenType
+
+        t = self._types.get(specimen_id)
+        if t is None:
+            return None
+        return SpecimenMetadata(id=specimen_id, display_name=specimen_id, type=SpecimenType(t))
+
+
+async def test_resolve_specimen_type_prefers_staged_then_registry_then_store():
+    from ascribe_link.models import MeshResult, VolumeResult
+
+    mgr = AgentSessionManager(
+        model="claude-test",
+        client_factory=lambda: object(),
+        specimen_store=_FakeStore({"plant_sub": "volume", "shadowed": "volume"}),
+        function_registry=_FakeRegistry({"ai_generate": "mesh", "shadowed": "mesh"}),
+    )
+    sink = manager_module._RoomSink(mgr, "room1")
+    vol_id = sink.stage_result(VolumeResult.from_numpy(np.zeros((2, 2, 2), np.uint8)))
+    mesh_id = sink.stage_result(MeshResult(vertices=[0, 0, 0] * 3, indices=[0, 1, 2]))
+
+    assert sink.resolve_specimen_type(vol_id) == "volume"
+    assert sink.resolve_specimen_type(mesh_id) == "mesh"
+    assert sink.resolve_specimen_type("plant_sub") == "volume"
+    assert sink.resolve_specimen_type("ai_generate") == "mesh"
+    assert sink.resolve_specimen_type("shadowed") == "mesh"  # registry wins over store
+    assert sink.resolve_specimen_type("../plant_sub.npy") is None
+    # Staged results are room-scoped.
+    assert mgr.resolve_specimen_type("otherroom", vol_id) is None
+
+
+async def test_resolve_specimen_type_without_catalog_only_sees_staged():
+    from ascribe_link.models import VolumeResult
+
+    mgr = make_manager()
+    sink = manager_module._RoomSink(mgr, "room1")
+    vol_id = sink.stage_result(VolumeResult.from_numpy(np.zeros((2, 2, 2), np.uint8)))
+    assert sink.resolve_specimen_type(vol_id) == "volume"
+    assert sink.resolve_specimen_type("plant_sub") is None

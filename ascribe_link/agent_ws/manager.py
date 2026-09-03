@@ -76,6 +76,9 @@ class _RoomSink:
     def get_staged(self, specimen_id: str) -> Any:
         return self._manager.get_staged_result(self.room_id, specimen_id)
 
+    def resolve_specimen_type(self, specimen_id: str) -> str | None:
+        return self._manager.resolve_specimen_type(self.room_id, specimen_id)
+
 
 class _RoomState:
     """Per-room bookkeeping: sockets, client ids, the conversation, staged results."""
@@ -143,11 +146,17 @@ class AgentSessionManager:
         client_factory=None,
         stt: STTEngine | None = None,
         tts: TTSEngine | None = None,
+        specimen_store: Any | None = None,
+        function_registry: Any | None = None,
     ) -> None:
         self.model = model
         self._client_factory = client_factory
         self.stt = stt
         self.tts = tts
+        # Catalog lookups for `resolve_specimen_type` (load_specimen needs to
+        # know mesh-vs-volume for catalog ids too, not just staged ones).
+        self._specimen_store = specimen_store
+        self._function_registry = function_registry
 
         self._rooms: dict[str, _RoomState] = {}
         self._main_loop: asyncio.AbstractEventLoop | None = None
@@ -786,6 +795,35 @@ class AgentSessionManager:
         if room is None:
             return None
         return room.staged.get(specimen_id)
+
+    def resolve_specimen_type(self, room_id: str, specimen_id: str) -> str | None:
+        """Return "mesh" / "volume" for `specimen_id`, or None if it is unknown.
+
+        Order: the room's staged store (agent-submitted results), then
+        code-registered specimens, then filesystem bundles. Used by
+        `load_specimen` to tell the client which renderer to instantiate --
+        the client cannot work this out itself for staged specimens (they
+        have no catalog entry) and falls back to "mesh" when it can't.
+        """
+        from ascribe_link.models import MeshResult, VolumeResult
+
+        staged = self.get_staged_result(room_id, specimen_id)
+        if isinstance(staged, VolumeResult):
+            return "volume"
+        if isinstance(staged, MeshResult):
+            return "mesh"
+        if staged is not None:
+            return None
+
+        meta = None
+        if self._function_registry is not None:
+            meta = self._function_registry.get_specimen(specimen_id)
+        if meta is None and self._specimen_store is not None:
+            meta = self._specimen_store.get(specimen_id)
+        if meta is None:
+            return None
+        type_value = getattr(meta, "type", None)
+        return getattr(type_value, "value", type_value)
 
     # ------------------------------------------------------------------
     # Shutdown

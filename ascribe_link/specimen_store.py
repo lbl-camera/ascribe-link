@@ -81,7 +81,27 @@ class SpecimenStore:
         return result
 
     def get(self, specimen_id: str) -> SpecimenMetadata | None:
-        return self._cache.get(specimen_id)
+        meta = self._cache.get(specimen_id)
+        if meta is None and self._maybe_rescan_for(specimen_id):
+            meta = self._cache.get(specimen_id)
+        return meta
+
+    def _maybe_rescan_for(self, specimen_id: str) -> bool:
+        """Rescan if a bundle dir for `specimen_id` appeared since the last scan.
+
+        Bundles get written at runtime (the conversational agent does this to
+        show real-sized data), and until now they were invisible until someone
+        hit ``GET /api/specimens/reload`` by hand -- a lookup miss meant the
+        client fell back to the "mesh" renderer for a volume. The check is a
+        single ``is_file`` on the expected ``specimen.json`` path, so a miss
+        for a genuinely unknown id costs no directory walk.
+        """
+        if not specimen_id or "/" in specimen_id or "\\" in specimen_id or specimen_id in (".", ".."):
+            return False
+        if not (self._root / specimen_id / "specimen.json").is_file():
+            return False
+        self.reload()
+        return True
 
     def specimen_dir(self, specimen_id: str) -> Path | None:
         if specimen_id in self._cache:

@@ -280,6 +280,8 @@ def create_app(
             client_factory=agent_client_factory,
             stt=stt_engine,
             tts=tts_engine,
+            specimen_store=store,
+            function_registry=registry,
         )
         voice_status = "enabled" if (stt_engine is not None and tts_engine is not None) else "disabled"
         if stt_engine is not None and tts_engine is not None:

@@ -1,18 +1,24 @@
 """Conversational MCP tool surface for the persistent agent-conversation session.
 
-Registers nine tools on an in-process MCP server named ``"scene"``:
+Registers eleven tools on an in-process MCP server named ``"scene"``:
 
-- Server-compute: ``submit_mesh``, ``submit_volume`` -- de-closured ports of
-  ``agent_generator.py``'s ``submit_mesh``/``submit_volume`` tools (same JSON
-  schemas and validation), except instead of setting a one-shot ``AgentResult``
-  they call ``sink.stage_result(...)`` and return, so the conversation
-  continues. ``analyze_specimen`` looks up a previously staged result and
-  reports basic statistics.
+- Server-compute: ``submit_mesh``, ``submit_volume``, ``submit_mesh_file``,
+  ``submit_volume_file`` -- de-closured ports of ``agent_generator.py``'s
+  tools of the same names (same JSON schemas and validation), except instead
+  of setting a one-shot ``AgentResult`` they call ``sink.stage_result(...)``
+  and return, so the conversation continues. The ``*_file`` variants read the
+  data from disk so a real-sized volume never has to be inlined as base64 in
+  a tool-call argument. ``analyze_specimen`` looks up a previously staged
+  result and reports basic statistics.
 - Client-forwarded: ``load_specimen``, ``set_active_specimen``,
   ``remove_specimen``, ``set_room_scene``, ``set_display_param``,
   ``capture_viewport`` -- each is a thin, timeout-wrapped call to
-  ``sink.request_client_tool(name, args)``. The manager (a later task) pairs
-  the reply with the real client RPC / binary frame.
+  ``sink.request_client_tool(name, args)``. The manager pairs the reply with
+  the real client RPC / binary frame. ``load_specimen`` additionally resolves
+  the specimen's renderer type server-side (via ``sink.resolve_specimen_type``)
+  and injects it into the forwarded args: the client has no catalog entry for
+  agent-staged specimens, so without this it can only guess -- and its guess
+  is "mesh", which silently renders nothing for a volume.
 
 ``claude_agent_sdk`` is imported lazily inside ``build_conversation_tools`` so
 importing this module never requires the SDK to be installed.
@@ -24,6 +30,7 @@ import asyncio
 import base64
 import logging
 import math
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
 logger = logging.getLogger(__name__)
@@ -55,6 +62,10 @@ class ConversationSink(Protocol):
         """Look up a previously staged result by specimen id, or None."""
         ...
 
+    def resolve_specimen_type(self, specimen_id: str) -> str | None:
+        """Return "mesh"/"volume" for a staged or catalog specimen, else None."""
+        ...
+
 
 def _error(text: str) -> dict:
     return {"content": [{"type": "text", "text": text}], "is_error": True}
@@ -74,6 +85,23 @@ def _client_forward(
     """
 
     async def handler(args: dict) -> dict:
+        if name == "load_specimen":
+            # Resolve the renderer type here, where both the staged store and
+            # the catalog are visible. A specimen id that resolves to nothing
+            # is an error *now* -- the client used to reply ok:true for any
+            # string (file paths included) and the agent reasoned from that
+            # phantom success for turns.
+            specimen_id = str(args.get("specimen_id", ""))
+            specimen_type = sink.resolve_specimen_type(specimen_id)
+            if specimen_type is None:
+                return _error(
+                    f"Error: unknown specimen id '{specimen_id}'. load_specimen takes an "
+                    "id returned by submit_mesh/submit_volume/submit_*_file or a catalog "
+                    "specimen id -- not a file path. To show a file, use "
+                    "submit_volume_file / submit_mesh_file first."
+                )
+            args = {**args, "type": specimen_type}
+
         try:
             result = await asyncio.wait_for(
                 sink.request_client_tool(name, args), CLIENT_TOOL_TIMEOUT
@@ -84,15 +112,17 @@ def _client_forward(
         if name == "capture_viewport":
             if not isinstance(result, (bytes, bytearray)):
                 return _error(f"Tool {name} failed: expected JPEG bytes, got {type(result).__name__}")
+            # MCP ImageContent shape ({data, mimeType}), NOT the Anthropic
+            # Messages API {source: {...}} shape: claude_agent_sdk's
+            # _convert_tool_content indexes item["data"] / item["mimeType"]
+            # directly, and the API shape surfaced to the agent as the bare
+            # error text "'data'" (a KeyError) on every capture.
             return {
                 "content": [
                     {
                         "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/jpeg",
-                            "data": base64.b64encode(bytes(result)).decode("ascii"),
-                        },
+                        "data": base64.b64encode(bytes(result)).decode("ascii"),
+                        "mimeType": "image/jpeg",
                     }
                 ]
             }
@@ -100,6 +130,17 @@ def _client_forward(
         return _text(str(result))
 
     return handler
+
+
+def _resolve_submit_path(file_path: str) -> Path | None:
+    """Resolve a ``submit_*_file`` path: relative to the server cwd, else as given."""
+    candidate = Path.cwd() / file_path
+    if candidate.is_file():
+        return candidate
+    candidate = Path(file_path)
+    if candidate.is_file():
+        return candidate
+    return None
 
 
 def _analyze_volume(vr: Any) -> str:
@@ -141,7 +182,7 @@ def build_conversation_tools(sink: ConversationSink) -> tuple[dict, list[str], l
         (server, allowed_tools, sdk_tools) -- `server` is the
         `McpSdkServerConfig` dict from `create_sdk_mcp_server`, ready for
         `ClaudeAgentOptions.mcp_servers`. `allowed_tools` is
-        `["mcp__scene__" + name, ...]` for all nine tools. `sdk_tools` is the
+        `["mcp__scene__" + name, ...]` for all eleven tools. `sdk_tools` is the
         raw `SdkMcpTool` list, returned separately so tests can invoke
         handlers directly -- it MUST NOT be stored inside `server`: the SDK
         json.dumps-es that dict verbatim when building the CLI command, and
@@ -280,6 +321,135 @@ def build_conversation_tools(sink: ConversationSink) -> tuple[dict, list[str], l
             f"({total_voxels:,} voxels, {dtype}). It is now visible to the user."
         )
 
+    submit_mesh_file_schema = {
+        "type": "object",
+        "properties": {
+            "file_path": {
+                "type": "string",
+                "description": "Path to a JSON file with 'vertices' ([[x,y,z], ...]) and "
+                "'indices' (flat int list) keys, optionally 'normals'",
+            },
+        },
+        "required": ["file_path"],
+    }
+
+    @tool(
+        "submit_mesh_file",
+        "Submit a triangular mesh from a JSON file on disk. Use this instead of "
+        "submit_mesh for any mesh too large to inline. The file must have 'vertices' "
+        "and 'indices', and optionally 'normals'. The mesh becomes visible to the "
+        "user; the conversation continues afterward.",
+        submit_mesh_file_schema,
+    )
+    async def submit_mesh_file(args: dict) -> dict:
+        import json
+
+        from ascribe_link.models import MeshResult
+
+        file_path = str(args.get("file_path", ""))
+        if not file_path:
+            return _error("Error: file_path is required")
+        full_path = _resolve_submit_path(file_path)
+        if full_path is None:
+            return _error(f"Error: file not found: {file_path}")
+
+        try:
+            data = await asyncio.to_thread(lambda: json.loads(full_path.read_text()))
+        except (json.JSONDecodeError, OSError) as err:
+            return _error(f"Error: could not read mesh file: {err}")
+        if not isinstance(data, dict):
+            return _error("Error: mesh file must be a JSON object")
+
+        vertices = data.get("vertices", [])
+        indices = data.get("indices", [])
+        normals = data.get("normals")
+        if not vertices:
+            return _error("Error: vertices list is empty")
+        if not indices:
+            return _error("Error: indices list is empty")
+        if len(indices) % 3 != 0:
+            return _error("Error: indices length must be divisible by 3 (triangles)")
+
+        # Accept either nested [[x,y,z], ...] or an already-flat list.
+        if vertices and isinstance(vertices[0], (list, tuple)):
+            flat_vertices = [float(c) for v in vertices for c in v]
+        else:
+            flat_vertices = [float(c) for c in vertices]
+        if len(flat_vertices) % 3 != 0:
+            return _error("Error: vertices must be [x, y, z] triples")
+        flat_normals = None
+        if normals:
+            if isinstance(normals[0], (list, tuple)):
+                flat_normals = [float(c) for n in normals for c in n]
+            else:
+                flat_normals = [float(c) for c in normals]
+
+        mesh_result = MeshResult(
+            vertices=flat_vertices, indices=[int(i) for i in indices], normals=flat_normals
+        )
+        specimen_id = sink.stage_result(mesh_result)
+        return _text(
+            f"Mesh submitted from file as specimen '{specimen_id}': "
+            f"{len(flat_vertices) // 3} vertices, {len(indices) // 3} triangles. "
+            "It is now visible to the user."
+        )
+
+    submit_volume_file_schema = {
+        "type": "object",
+        "properties": {
+            "file_path": {
+                "type": "string",
+                "description": "Path to a volume file: .npy (preferred, written with "
+                "np.save), .npz, or a .json envelope with shape/dtype/data(base64)",
+            },
+            "spacing": {
+                "type": "array",
+                "description": "Optional voxel spacing [sz, sy, sx]; overrides any spacing in the file",
+                "items": {"type": "number"},
+                "minItems": 3,
+                "maxItems": 3,
+            },
+        },
+        "required": ["file_path"],
+    }
+
+    @tool(
+        "submit_volume_file",
+        "Submit volumetric (voxel) data from a file on disk. Use this instead of "
+        "submit_volume for any real-sized volume -- write the 3D array with "
+        "np.save('volume.npy', arr) and pass the path; .npz and .json envelopes are also "
+        "accepted. The volume becomes visible to the user; the conversation continues "
+        "afterward.",
+        submit_volume_file_schema,
+    )
+    async def submit_volume_file(args: dict) -> dict:
+        from ascribe_link.agent_generator import _load_volume_array
+        from ascribe_link.models import VolumeResult
+
+        file_path = str(args.get("file_path", ""))
+        if not file_path:
+            return _error("Error: file_path is required")
+        full_path = _resolve_submit_path(file_path)
+        if full_path is None:
+            return _error(f"Error: file not found: {file_path}")
+
+        try:
+            arr, file_spacing = await asyncio.to_thread(_load_volume_array, full_path)
+        except ValueError as err:
+            return _error(f"Error: {err}")
+        if arr.ndim != 3:
+            return _error(f"Error: volume must be 3D, got shape {list(arr.shape)}")
+
+        spacing = args.get("spacing") or file_spacing
+        volume_result = await asyncio.to_thread(VolumeResult.from_numpy, arr, spacing=spacing)
+        specimen_id = sink.stage_result(volume_result)
+
+        total_voxels = int(arr.shape[0] * arr.shape[1] * arr.shape[2])
+        return _text(
+            f"Volume submitted from file as specimen '{specimen_id}': {volume_result.shape} "
+            f"({total_voxels:,} voxels, {volume_result.dtype}). It is now visible to the user."
+        )
+
     @tool(
         "analyze_specimen",
         "Compute basic statistics on a previously submitted/loaded specimen: for volumes, "
@@ -313,8 +483,11 @@ def build_conversation_tools(sink: ConversationSink) -> tuple[dict, list[str], l
     client_forwarded_specs = [
         (
             "load_specimen",
-            "Load a specimen into the scene by its id (returned by submit_mesh/submit_volume "
-            "or otherwise known to the client).",
+            "Load a specimen into the scene by its id: either an id returned by "
+            "submit_mesh/submit_volume/submit_mesh_file/submit_volume_file, or a catalog "
+            "specimen id. This is NOT a file path -- to display a file, submit it with "
+            "submit_volume_file / submit_mesh_file first. The renderer (mesh vs volume) is "
+            "chosen from the specimen's type automatically.",
             {
                 "type": "object",
                 "properties": {"specimen_id": {"type": "string"}},
@@ -368,7 +541,7 @@ def build_conversation_tools(sink: ConversationSink) -> tuple[dict, list[str], l
         ),
     ]
 
-    sdk_tools = [submit_mesh, submit_volume, analyze_specimen]
+    sdk_tools = [submit_mesh, submit_volume, submit_mesh_file, submit_volume_file, analyze_specimen]
     for name, description, schema in client_forwarded_specs:
         sdk_tools.append(tool(name, description, schema)(_client_forward(sink, name)))
 
