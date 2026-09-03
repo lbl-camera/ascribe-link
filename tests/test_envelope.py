@@ -37,6 +37,22 @@ def test_volume_round_trip_uint8():
     np.testing.assert_array_equal(decoded.to_numpy(), arr)
 
 
+def _preamble(blob: bytes) -> dict:
+    (n,) = struct.unpack("<I", blob[:4])
+    return json.loads(blob[4 : 4 + n])
+
+
+def test_volume_preamble_carries_value_range():
+    arr = np.array([[[3, 250]], [[7, 90]]], dtype=np.uint8)
+    assert _preamble(encode_envelope(VolumeResult.from_numpy(arr)))["value_range"] == [3.0, 250.0]
+
+    farr = np.array([[[-1.5, np.nan]], [[2.25, 0.0]]], dtype=np.float32)
+    assert _preamble(encode_envelope(VolumeResult.from_numpy(farr)))["value_range"] == [-1.5, 2.25]
+
+    allnan = np.full((1, 1, 2), np.nan, dtype=np.float32)
+    assert "value_range" not in _preamble(encode_envelope(VolumeResult.from_numpy(allnan)))
+
+
 def test_mesh_round_trip_with_normals():
     original = MeshResult(
         vertices=[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],

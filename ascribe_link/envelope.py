@@ -59,6 +59,13 @@ def _encode_volume(result: VolumeResult) -> bytes:
         preamble["spacing"] = list(result.spacing)
     if result.origin is not None:
         preamble["origin"] = list(result.origin)
+    # Actual data range, so the client can normalize to [0, 1] on the GPU
+    # (the raymarcher expects unit-range scalars) without a per-voxel pass in
+    # GDScript. Free here; NaNs are ignored so one bad voxel can't poison it.
+    if arr.size:
+        vmin, vmax = np.nanmin(arr), np.nanmax(arr)
+        if np.isfinite(vmin) and np.isfinite(vmax):
+            preamble["value_range"] = [float(vmin), float(vmax)]
     preamble_bytes = json.dumps(preamble, separators=(",", ":")).encode("utf-8")
     header = struct.pack("<I", len(preamble_bytes)) + preamble_bytes
     return header + np.ascontiguousarray(arr).tobytes()
