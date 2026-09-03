@@ -658,3 +658,38 @@ async def test_resolve_specimen_type_without_catalog_only_sees_staged():
     vol_id = sink.stage_result(VolumeResult.from_numpy(np.zeros((2, 2, 2), np.uint8)))
     assert sink.resolve_specimen_type(vol_id) == "volume"
     assert sink.resolve_specimen_type("plant_sub") is None
+
+
+async def test_tts_drain_survives_encode_failure_and_still_ends_turn(monkeypatch):
+    """A failure after synthesis (encoding/framing) used to escape the
+    try/except and kill the drain task, so the queued _END_TURN was never
+    dequeued and agent_audio_end never reached the client -- the Talk button
+    stayed on "Interrupt & talk" until the next turn."""
+    mgr = make_voice_manager()
+    s1 = FakeSocket()
+    await mgr.connect("room1", s1)
+    room = mgr._rooms["room1"]
+
+    calls = {"n": 0}
+    real_encode = manager_module.protocol.encode_binary
+
+    def flaky_encode(header, payload):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ValueError("bad pcm")
+        return real_encode(header, payload)
+
+    monkeypatch.setattr(manager_module.protocol, "encode_binary", flaky_encode)
+
+    await mgr._handle_text_delta("room1", "First sentence. Second sentence. ")
+    await mgr._finish_tts_turn("room1")
+    for _ in range(50):
+        if any(f.get("type") == "agent_audio_end" for f in s1.sent):
+            break
+        await asyncio.sleep(0.05)
+
+    ends = [f for f in s1.sent if f.get("type") == "agent_audio_end"]
+    assert ends == [{"type": "agent_audio_end", "interrupted": False}]
+    binaries = [e for e in s1.events if e[0] == "binary"]
+    assert len(binaries) == 1  # the second sentence still went out
+    assert not room.tts_task.done()

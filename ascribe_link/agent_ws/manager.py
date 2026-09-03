@@ -686,16 +686,20 @@ class AgentSessionManager:
                 room.tts_seq = 0
                 await self.broadcast(room_id, protocol.agent_audio_end(interrupted=False))
                 continue
+            # One bad sentence must not kill the drain loop: if this task
+            # died, the queued _END_TURN would never be dequeued, no
+            # agent_audio_end would go out, and every client would sit on
+            # "agent speaking" until the next turn.
             try:
                 pcm = await asyncio.to_thread(self.tts.synthesize, item)
-            except Exception:  # noqa: BLE001 - one bad sentence must not kill the drain loop
-                logger.exception("TTS synthesis failed in room %s", room_id)
+                seq = room.tts_seq
+                room.tts_seq += 1
+                payload = protocol.encode_binary(
+                    protocol.tts_header(seq), audio.float32_to_pcm16(pcm)
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("TTS synthesis/encoding failed in room %s", room_id)
                 continue
-            seq = room.tts_seq
-            room.tts_seq += 1
-            payload = protocol.encode_binary(
-                protocol.tts_header(seq), audio.float32_to_pcm16(pcm)
-            )
             await self._broadcast_binary(room_id, payload)
 
     async def _broadcast_binary(self, room_id: str, data: bytes) -> None:

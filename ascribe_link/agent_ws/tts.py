@@ -73,6 +73,12 @@ class KokoroTTS:
                 urllib.request.urlretrieve(KOKORO_VOICES_URL, voices_path)
 
             self._kokoro = Kokoro(model_path, voices_path)
+            # kokoro-onnx phonemizes through phonemizer's espeak backend,
+            # which warns "words count mismatch on N% of the lines" whenever
+            # espeak merges or splits tokens (numbers, hyphens, symbols such
+            # as "[::4]"). It is informational -- the audio is unaffected --
+            # and it fires on most sentences, so drop it below WARNING.
+            logging.getLogger("phonemizer").setLevel(logging.ERROR)
         return self._kokoro
 
     def synthesize(self, text: str) -> np.ndarray:
