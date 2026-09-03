@@ -1114,6 +1114,7 @@ async def generate_with_agent(
             # Process responses with timeout
             async def process_responses():
                 msg_count = 0
+                submission_reported = False
                 async for msg in client.receive_response():
                     msg_count += 1
                     msg_type = type(msg).__name__
@@ -1150,23 +1151,28 @@ async def generate_with_agent(
                             getattr(msg, "result", "no result attr"),
                         )
 
-                    # Check if we got a result
-                    if result.submitted:
+                    # Note the submission but let the turn run to its natural
+                    # end (ResultMessage). Returning here used to tear the SDK
+                    # client down mid-turn, cutting off any wrap-up the agent
+                    # was about to say. A later submit_* call in the same turn
+                    # simply overwrites `result` -- the last one wins.
+                    if result.submitted and not submission_reported:
+                        submission_reported = True
                         reporter.report(
                             f"{result.result_type.capitalize()} submitted"
                             if result.result_type
                             else "Result submitted"
                         )
-                        logger.info("Result submitted, exiting response loop")
-                        gt_mark("agent: submission observed, exiting response loop")
-                        return
+                        logger.info("Result submitted; letting the turn finish")
+                        gt_mark("agent: submission observed")
 
-                logger.warning(
-                    "Response loop ended without submission "
-                    "(processed %d messages, result subtype=%s)",
-                    msg_count,
-                    final_state["subtype"],
-                )
+                if not result.submitted:
+                    logger.warning(
+                        "Response loop ended without submission "
+                        "(processed %d messages, result subtype=%s)",
+                        msg_count,
+                        final_state["subtype"],
+                    )
 
             try:
                 await asyncio.wait_for(process_responses(), timeout=timeout)
