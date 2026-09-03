@@ -333,6 +333,12 @@ class AgentSessionManager:
         room = self._room(room_id)
 
         if frame_type == "text":
+            # A new message while the agent is still talking is an interrupt:
+            # drop the queued speech and cancel the running turn so the reply
+            # to *this* message starts immediately instead of queueing behind
+            # the rest of the old one (same teardown as voice barge-in).
+            if room.speaking or (room.tts_task is not None and not room.tts_task.done()):
+                await self._interrupt_turn(room, room_id)
             try:
                 if room.conversation is None:
                     room.conversation = self._start_conversation(room_id)

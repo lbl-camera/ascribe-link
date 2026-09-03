@@ -693,3 +693,39 @@ async def test_tts_drain_survives_encode_failure_and_still_ends_turn(monkeypatch
     binaries = [e for e in s1.events if e[0] == "binary"]
     assert len(binaries) == 1  # the second sentence still went out
     assert not room.tts_task.done()
+
+
+async def test_text_while_speaking_interrupts_and_ends_audio():
+    """A typed message mid-reply supersedes it: TTS queue dropped, running
+    turn interrupted, agent_audio_end(interrupted=True) broadcast, then the
+    new message is submitted."""
+    mgr = make_voice_manager()
+    s1 = FakeSocket()
+    await mgr.connect("room1", s1)
+    convo = FakeConversation.instances[-1]
+    room = mgr._rooms["room1"]
+
+    await mgr._handle_text_delta("room1", "Long first reply that keeps going. ")
+    assert room.speaking
+    s1.sent.clear()
+
+    await mgr.handle_frame("room1", s1, {"type": "text", "text": "actually, stop"})
+
+    assert convo.interrupted
+    assert convo.submitted == ["actually, stop"]
+    assert not room.speaking
+    assert room.tts_task is None
+    assert {"type": "agent_audio_end", "interrupted": True} in s1.sent
+
+
+async def test_text_while_idle_does_not_interrupt():
+    mgr = make_voice_manager()
+    s1 = FakeSocket()
+    await mgr.connect("room1", s1)
+    convo = FakeConversation.instances[-1]
+    s1.sent.clear()
+
+    await mgr.handle_frame("room1", s1, {"type": "text", "text": "hello"})
+
+    assert not convo.interrupted
+    assert not any(f.get("type") == "agent_audio_end" for f in s1.sent)
