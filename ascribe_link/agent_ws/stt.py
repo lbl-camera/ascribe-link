@@ -85,7 +85,14 @@ class UtteranceBuffer:
     # before the first word ever arrived.
     SILENCE_ONLY_GRACE_S = 8.0
 
-    def should_finalize(self, silence_s: float = 2.0, max_s: float = 60.0) -> bool:
+    # Trailing silence after speech that ends the utterance. What the user
+    # perceives as "wait time" is this plus the client's 0.5 s capture
+    # buffer plus STT -> LLM -> first TTS latency; 2.0 s here felt like ~4 s
+    # end to end, so 1.0 s targets ~2.5 s perceived. Lower still starts
+    # cutting into mid-sentence thinking pauses.
+    END_SILENCE_S = 1.0
+
+    def should_finalize(self, silence_s: float = END_SILENCE_S, max_s: float = 60.0) -> bool:
         if self.duration_s < 0.5:
             return False
         if self.duration_s >= max_s:

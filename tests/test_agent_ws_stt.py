@@ -108,3 +108,23 @@ def test_voiced_then_silence_still_finalizes_at_2s():
     buf.add(float32_to_pcm16(tone), 16000)
     buf.add(float32_to_pcm16(np.zeros(16000 * 2 + 1600, dtype=np.float32)), 16000)
     assert buf.should_finalize()
+
+
+def test_end_silence_is_one_second():
+    """Endpointing after speech: 1.0 s of trailing silence (END_SILENCE_S),
+    not 2.0 -- the perceived wait also includes capture buffering and
+    STT/LLM/TTS latency, and 2.0 felt like ~4 s end to end."""
+    from ascribe_link.agent_ws.stt import UtteranceBuffer
+    import numpy as np
+    from ascribe_link.agent_ws.audio import float32_to_pcm16
+
+    assert UtteranceBuffer.END_SILENCE_S == 1.0
+
+    buf = UtteranceBuffer()
+    t = np.arange(16000, dtype=np.float32) / 16000.0
+    tone = (0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+    buf.add(float32_to_pcm16(tone), 16000)
+    buf.add(float32_to_pcm16(np.zeros(int(16000 * 0.6), dtype=np.float32)), 16000)
+    assert not buf.should_finalize()  # 0.6 s: a thinking pause, keep listening
+    buf.add(float32_to_pcm16(np.zeros(int(16000 * 0.5), dtype=np.float32)), 16000)
+    assert buf.should_finalize()  # 1.1 s: done
